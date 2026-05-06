@@ -35,15 +35,14 @@ module.exports = {
     // 浏览器 UA，部分页面结构和风控表现会受 UA 影响。
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    // 启动时如果这里有 cookie，就主动注入到每个页面；不填则按当前浏览器目录里的状态继续跑。
-    cookies: [
-      {
-        name: "sessionid",
-        value: "",
-        domain: ".tiktok.com",
-        path: "/",
-      },
-    ],
+    auth: {
+      // 登录态策略；profile 表示优先复用本地 profile，anonymous 表示无痕模式且不复用任何 Cookie。
+      mode: "profile",
+      // 专用浏览器目录；首次登录后状态会长期保存在这里，后续运行自动复用。
+      userDataDir: "../.chrome-data/tiktok-auth",
+      // TikTok Cookie 文件路径；只在 profile 目录尚不存在时用于初始化登录态，留空表示不启用文件导入。
+      cookieFile: "",
+    },
   },
   scroll: {
     // 每次滚动后的统一等待时间，单位毫秒；同时用于搜索页和主页的懒加载缓冲。

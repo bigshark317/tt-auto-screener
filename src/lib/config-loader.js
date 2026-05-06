@@ -43,6 +43,10 @@ function loadConfig(configPathArg) {
   };
 
   merged.export.outputDir = resolveMaybeRelative(configDir, merged.export.outputDir);
+  if (merged.browser?.auth) {
+    merged.browser.auth.userDataDir = resolveMaybeRelative(configDir, merged.browser.auth.userDataDir);
+    merged.browser.auth.cookieFile = resolveMaybeRelative(configDir, merged.browser.auth.cookieFile);
+  }
   return merged;
 }
 

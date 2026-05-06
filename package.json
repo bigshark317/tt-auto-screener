@@ -4,7 +4,8 @@
   "description": "TikTok 搜索页自动筛选脚本",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js --config=./config/default.config.js"
+    "start": "node src/index.js --config=./config/default.config.js",
+    "login": "node src/login.js --config=./config/default.config.js"
   },
   "keywords": [
     "tiktok",

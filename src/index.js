@@ -1,8 +1,10 @@
 const {
+  createBrowserSession,
   launchBrowser,
   createPage,
   extractAuthorsFromCurrentSearchViewport,
   collectUserProfile,
+  ensureTikTokAuth,
   openSearchPage,
   scrollSearchResults,
 } = require('./lib/tiktok-scraper');
@@ -167,7 +169,9 @@ async function main() {
   console.log(`断点已内置在: ${liveWriter.xlsxPath}`);
   console.log(`作者并行分析数: ${getParallelAuthors(config)}`);
   console.log(`作者主页目标视频数: ${getProfileTargetVideoCount(config)}`);
-  console.log(`启动时注入 Cookie 数: ${Array.isArray(config.browser.cookies) ? config.browser.cookies.length : 0}`);
+  console.log(`登录态策略: ${config.browser.auth?.mode || 'disabled'}`);
+  console.log(`登录态目录: ${config.browser.auth?.userDataDir || '-'}`);
+  console.log(`Cookie 文件: ${config.browser.auth?.cookieFile || '-'}`);
 
   const browserOptions = {
     headless: config.browser.headless,
@@ -176,24 +180,35 @@ async function main() {
     viewport: config.browser.viewport,
     extraHttpHeaders: config.browser.extraHttpHeaders,
     userAgent: config.browser.userAgent,
+    auth: config.browser.auth,
   };
   const pageOptions = {
     timeoutMs: config.browser.timeoutMs,
     viewport: config.browser.viewport,
     extraHttpHeaders: config.browser.extraHttpHeaders,
     userAgent: config.browser.userAgent,
-    cookies: config.browser.cookies,
     searchReadyTimeoutMs: config.scroll.apiWaitMs,
     profileApiWaitMs: config.scroll.apiWaitMs,
     scrollSettleMs: config.scroll.scrollWaitMs,
   };
 
   const browser = await launchBrowser(browserOptions);
-  const searchPage = await createPage(browser, pageOptions);
+  const authState = await ensureTikTokAuth(browser, browserOptions);
+  const sourceLabelMap = {
+    profile: '复用本地 profile',
+    'cookie-file': '导入 Cookie 文件',
+    anonymous: '无痕模式',
+    none: '未导入登录态',
+  };
+  console.log(
+    `登录态检查 | 已登录 ${authState.loggedIn ? '是' : '否'} | 来源 ${sourceLabelMap[authState.source] || authState.source || '-'} | 导入 Cookie ${authState.importedCookieCount || 0}`,
+  );
+  const browserSession = await createBrowserSession(browser, browserOptions);
+  const searchPage = await createPage(browserSession.pageTarget, pageOptions);
   const parallelAuthors = getParallelAuthors(config);
   const profileTargetVideoCount = getProfileTargetVideoCount(config);
   const profilePages = await Promise.all(
-    Array.from({ length: parallelAuthors }, () => createPage(browser, pageOptions)),
+    Array.from({ length: parallelAuthors }, () => createPage(browserSession.pageTarget, pageOptions)),
   );
   try {
     await searchPage.bringToFront();
@@ -335,6 +350,7 @@ async function main() {
     liveWriter.saveCheckpoint(state);
     await searchPage.close();
     await Promise.all(profilePages.map((page) => page.close()));
+    await browserSession.close();
     await browser.close();
     process.off('SIGINT', handleSigint);
   }

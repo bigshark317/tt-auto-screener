@@ -49,7 +49,9 @@ npm install
 - `search.url`: 搜索页链接
 - `browser.viewport.width` / `browser.viewport.height`: 浏览器尺寸
 - `browser.headless`: 是否无头运行
-- `browser.cookies`: 启动时注入的 TikTok Cookie 数组
+- `browser.auth.mode`: 登录态模式，支持 `profile` 和 `anonymous`
+- `browser.auth.userDataDir`: 专用 TikTok 登录态目录
+- `browser.auth.cookieFile`: TikTok Cookie 文件路径
 - `search.infinite`: 是否无限滚动
 - `search.targetCount`: 非无限模式下目标作者数
 - `rules.levels`: 等级配置数组
@@ -67,30 +69,56 @@ npm install
 npm start
 ```
 
-## Cookie 用法
+初始化并保存 TikTok 登录态：
 
-- 浏览器始终复用同一个本地目录 `.chrome-data`
-- 如果 `browser.cookies` 有内容，脚本会在每个页面打开前主动注入这些 cookie
-- 如果 `browser.cookies` 为空，脚本就不额外注入，直接使用当前浏览器目录里已有状态
+```bash
+npm run login
+```
 
-配置示例：
+## 登录态用法
 
-```js
-browser: {
-  cookies: [
+- 当前项目支持两种模式：
+  - `profile`: 优先复用 `browser.auth.userDataDir` 里的本地登录态；如果本地 profile 还不存在，会按配置从 `browser.auth.cookieFile` 导入一次 Cookie 初始化 profile
+  - `anonymous`: 使用无痕隔离上下文访问，不复用本地 profile，也不导入任何 Cookie
+- `profile` 下，后续新页面直接继承这个 profile，不再每个页面重复注入 Cookie
+
+推荐做法：
+
+1. 首次运行时用可见浏览器完成一次 TikTok 登录，保留 `browser.auth.userDataDir`
+2. 后续持续复用这个专用 profile
+3. 如果需要从别的浏览器迁移登录态，再准备 `input/tiktok.cookies.json` 作为初始化兜底
+
+`npm run login` 会：
+
+- 强制使用 `profile` 模式
+- 打开可见浏览器
+- 进入 TikTok 登录页等待你手动登录
+- 检测到登录成功后自动倒计时 5 秒退出
+- 将状态保存到 `browser.auth.userDataDir`
+
+Cookie 文件支持两种格式：
+
+```json
+[
+  {
+    "name": "sessionid",
+    "value": "xxx",
+    "domain": ".tiktok.com",
+    "path": "/"
+  }
+]
+```
+
+```json
+{
+  "cookies": [
     {
-      name: 'sessionid',
-      value: 'xxx',
-      domain: '.tiktok.com',
-      path: '/',
-    },
-    {
-      name: 'sid_tt',
-      value: 'xxx',
-      domain: '.tiktok.com',
-      path: '/',
-    },
-  ],
+      "name": "sessionid",
+      "value": "xxx",
+      "domain": ".tiktok.com",
+      "path": "/"
+    }
+  ]
 }
 ```
 
@@ -151,7 +179,9 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
   - `timeoutMs`: 页面超时
   - `viewport.width` / `viewport.height`: 浏览器窗口尺寸
   - `userAgent`: 浏览器 UA
-  - `cookies`: 启动时注入的 Puppeteer Cookie 数组；留空则不注入
+  - `auth.mode`: 登录态策略，支持 `profile` 和 `anonymous`
+  - `auth.userDataDir`: TikTok 专用 profile 目录
+  - `auth.cookieFile`: Cookie 文件路径
 - `scroll`:
   - `scrollWaitMs`: 每次滚动后的统一等待时间
   - `apiWaitMs`: 页面打开或滚动后，最多等多久让接口返回或页面就绪
@@ -226,5 +256,8 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
 - TikTok 可能因地区、风控、验证码导致接口返回不稳定。
 - TikWM 公开接口有时会被 Cloudflare 拦截，兜底能力不保证 100% 可用。
 - 如果遇到验证码或页面异常，先使用非 headless 模式排查。
-- `browser.cookies` 建议填写 TikTok 导出的完整 cookie 对象，至少包含 `name`、`value`，最好同时带上 `domain` 和 `path`。
+- `browser.auth.userDataDir` 建议使用单独目录，不要直接复用日常 Chrome 默认目录。
+- `input/tiktok.cookies.json` 已加入 `.gitignore`，不要把真实 TikTok Cookie 提交到仓库。
+- `browser.auth.cookieFile` 只会在 profile 目录不存在时用于首次初始化，不会在每次启动时反复覆盖已有状态。
+- 如果你要纯净访问且不带历史 Cookie，直接把 `browser.auth.mode` 改成 `anonymous`。
 - 断点续跑要求 `--url` 与实时 Excel 内记录的搜索链接保持一致。

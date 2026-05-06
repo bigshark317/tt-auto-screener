@@ -1,3 +1,4 @@
+const fs = require('fs');
 const puppeteer = require('puppeteer');
 const {
   sleep,
@@ -26,8 +27,14 @@ const DEFAULTS = {
     'accept-language': 'en-US,en;q=0.9',
   },
   userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  cookies: [],
+  auth: {
+    mode: 'profile',
+    userDataDir: '',
+    cookieFile: '',
+  },
 };
+
+const DEFAULT_TIKTOK_LOGIN_CHECK_URL = 'https://www.tiktok.com/foryou';
 
 const MAX_AUDIENCE_DEBUG_LOGS = 120;
 const DEFAULT_TIKWM_CONFIG = {
@@ -38,8 +45,32 @@ const DEFAULT_TIKWM_CONFIG = {
   },
 };
 
-function getChromeDataDir() {
-  return resolveProjectPath('.chrome-data');
+function getChromeDataDir(userDataDir = '') {
+  return userDataDir || resolveProjectPath('.chrome-data');
+}
+
+function normalizeAuthConfig(authConfig = {}) {
+  return {
+    ...DEFAULTS.auth,
+    ...(authConfig || {}),
+  };
+}
+
+function isAnonymousMode(authConfig = {}) {
+  return normalizeAuthConfig(authConfig).mode === 'anonymous';
+}
+
+function isProfileMode(authConfig = {}) {
+  return normalizeAuthConfig(authConfig).mode === 'profile';
+}
+
+function hasPersistedProfile(userDataDir) {
+  try {
+    if (!userDataDir || !fs.existsSync(userDataDir)) return false;
+    return fs.readdirSync(userDataDir).some((name) => name && !name.startsWith('.'));
+  } catch (error) {
+    return false;
+  }
 }
 
 function normalizeCookie(cookie, fallbackUrl) {
@@ -73,6 +104,119 @@ async function applyCookiesToPage(page, cookies = []) {
   const normalizedCookies = normalizeCookies(cookies);
   if (normalizedCookies.length === 0) return;
   await page.setCookie(...normalizedCookies);
+}
+
+function loadCookiesFromFile(cookieFile) {
+  if (!cookieFile) return [];
+  if (!fs.existsSync(cookieFile)) {
+    throw new Error(`Cookie 文件不存在: ${cookieFile}`);
+  }
+
+  const raw = fs.readFileSync(cookieFile, 'utf8').trim();
+  if (!raw) return [];
+
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed?.cookies)) return parsed.cookies;
+  throw new Error(`Cookie 文件格式无效，需为数组或 { cookies: [] }: ${cookieFile}`);
+}
+
+async function preparePage(page, options = {}) {
+  const merged = { ...DEFAULTS, ...options };
+  page.setDefaultTimeout(merged.timeoutMs);
+  await page.setUserAgent(merged.userAgent || DEFAULTS.userAgent);
+  await page.setExtraHTTPHeaders(merged.extraHttpHeaders || DEFAULTS.extraHttpHeaders);
+}
+
+function hasTikTokLoginCookies(cookies = []) {
+  const names = new Set((Array.isArray(cookies) ? cookies : []).map((cookie) => cookie?.name).filter(Boolean));
+  return ['sessionid', 'sessionid_ss', 'sid_tt', 'uid_tt', 'uid_tt_ss'].some((name) => names.has(name));
+}
+
+async function checkTikTokLoginState(page, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || DEFAULTS.timeoutMs;
+  const targetUrl = DEFAULT_TIKTOK_LOGIN_CHECK_URL;
+
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  await sleep(1200);
+  const cookies = await page.cookies('https://www.tiktok.com/');
+  return {
+    loggedIn: hasTikTokLoginCookies(cookies),
+    cookieNames: cookies.map((cookie) => cookie.name).filter(Boolean),
+  };
+}
+
+async function ensureTikTokAuth(browser, options = {}) {
+  const merged = { ...DEFAULTS, ...options };
+  const authConfig = normalizeAuthConfig(merged.auth);
+  const profileDir = getChromeDataDir(authConfig.userDataDir);
+  const profileExists = hasPersistedProfile(profileDir);
+  const result = {
+    enabled: !isAnonymousMode(authConfig),
+    mode: authConfig.mode || 'profile',
+    userDataDir: profileDir,
+    profileExists,
+    loggedIn: false,
+    source: 'none',
+    importedCookieCount: 0,
+  };
+
+  if (isAnonymousMode(authConfig)) {
+    return {
+      ...result,
+      enabled: false,
+      source: 'anonymous',
+    };
+  }
+
+  const page = await browser.newPage();
+  try {
+    await preparePage(page, merged);
+
+    const initialState = await checkTikTokLoginState(page, merged);
+    if (initialState.loggedIn) {
+      return {
+        ...result,
+        loggedIn: true,
+        source: 'profile',
+      };
+    }
+
+    let shouldImportCookies = false;
+    if (isProfileMode(authConfig) && !profileExists) {
+      shouldImportCookies = true;
+    }
+
+    if (!shouldImportCookies) {
+      return result;
+    }
+
+    const cookieCandidates = authConfig.cookieFile
+      ? loadCookiesFromFile(authConfig.cookieFile)
+      : [];
+    const normalizedCookies = normalizeCookies(cookieCandidates);
+
+    if (normalizedCookies.length === 0) {
+      return result;
+    }
+
+    await applyCookiesToPage(page, normalizedCookies);
+    await page.goto(DEFAULT_TIKTOK_LOGIN_CHECK_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: Number(merged.timeoutMs) || DEFAULTS.timeoutMs,
+    });
+    await sleep(1500);
+
+    const afterImportState = await checkTikTokLoginState(page, merged);
+    return {
+      ...result,
+      loggedIn: afterImportState.loggedIn,
+      source: 'cookie-file',
+      importedCookieCount: normalizedCookies.length,
+    };
+  } finally {
+    await page.close();
+  }
 }
 
 function mergeUserInfo(target, nextInfo) {
@@ -159,26 +303,64 @@ function parseVideoListPayload(payload) {
 
 async function launchBrowser(options = {}) {
   const merged = { ...DEFAULTS, ...options };
-  return puppeteer.launch({
+  const authConfig = normalizeAuthConfig(merged.auth);
+  const launchOptions = {
     headless: merged.headless,
     slowMo: merged.slowMo,
-    userDataDir: getChromeDataDir(),
     defaultViewport: merged.viewport || DEFAULTS.viewport,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--lang=en-US',
     ],
+  };
+
+  if (!isAnonymousMode(authConfig)) {
+    launchOptions.userDataDir = getChromeDataDir(authConfig.userDataDir);
+  }
+
+  return puppeteer.launch({
+    ...launchOptions,
   });
 }
 
-async function createPage(browser, options = {}) {
-  const merged = { ...DEFAULTS, ...options };
-  const page = await browser.newPage();
-  page.setDefaultTimeout(merged.timeoutMs);
-  await page.setUserAgent(merged.userAgent || DEFAULTS.userAgent);
-  await page.setExtraHTTPHeaders(merged.extraHttpHeaders || DEFAULTS.extraHttpHeaders);
-  await applyCookiesToPage(page, merged.cookies);
+async function createBrowserSession(browser, options = {}) {
+  const authConfig = normalizeAuthConfig(options.auth);
+  if (!isAnonymousMode(authConfig)) {
+    return {
+      pageTarget: browser,
+      isIsolated: false,
+      async close() {},
+    };
+  }
+
+  let context = null;
+  if (typeof browser.createBrowserContext === 'function') {
+    context = await browser.createBrowserContext();
+  } else if (typeof browser.createIncognitoBrowserContext === 'function') {
+    context = await browser.createIncognitoBrowserContext();
+  }
+
+  if (!context) {
+    return {
+      pageTarget: browser,
+      isIsolated: false,
+      async close() {},
+    };
+  }
+
+  return {
+    pageTarget: context,
+    isIsolated: true,
+    async close() {
+      await context.close();
+    },
+  };
+}
+
+async function createPage(pageTarget, options = {}) {
+  const page = await pageTarget.newPage();
+  await preparePage(page, options);
   return page;
 }
 
@@ -1186,8 +1368,10 @@ async function collectUserProfile(page, input, options = {}) {
 }
 
 module.exports = {
+  createBrowserSession,
   createPage,
   launchBrowser,
+  ensureTikTokAuth,
   collectAuthorsFromSearch,
   extractAuthorsFromCurrentSearchViewport,
   openSearchPage,
