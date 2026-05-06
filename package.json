@@ -1,0 +1,20 @@
+{
+  "name": "tt-auto-screener",
+  "version": "1.0.0",
+  "description": "TikTok 搜索页自动筛选脚本",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js --config=./config/default.config.js"
+  },
+  "keywords": [
+    "tiktok",
+    "puppeteer",
+    "xlsx"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^24.42.0",
+    "xlsx": "^0.18.5"
+  }
+}
