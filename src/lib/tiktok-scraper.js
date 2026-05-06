@@ -5,17 +5,19 @@ const {
   extractTimestampFromVideoId,
   normalizeUsername,
   resolveProjectPath,
+  formatAuthorLog,
 } = require('./helpers');
 
 const DEFAULTS = {
   headless: false,
   slowMo: 0,
   timeoutMs: 45000,
-  maxScrolls: 10,
   scrollPauseMs: 1200,
   searchReadyTimeoutMs: 5000,
   profileApiWaitMs: 5000,
   scrollSettleMs: 1200,
+  targetVideoCount: 30,
+  excludeRecentHours: 0,
   viewport: {
     width: 1440,
     height: 960,
@@ -189,24 +191,238 @@ async function extractAuthorsFromCurrentSearchViewport(page) {
 
 async function scrollSearchResults(page, options = {}) {
   const merged = { ...DEFAULTS, ...options };
-  const previousHeight = await page.evaluate(() => document.documentElement.scrollHeight);
-  await page.evaluate(() => {
-    window.scrollBy({ top: Math.round(window.innerHeight * 1.6), behavior: 'instant' });
+  const beforeState = await page.evaluate(() => {
+    function describeElement(el) {
+      if (!el) return 'window';
+      const tag = (el.tagName || 'unknown').toLowerCase();
+      const dataE2e = el.getAttribute?.('data-e2e');
+      const id = el.id ? `#${el.id}` : '';
+      const classes = typeof el.className === 'string'
+        ? el.className.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((name) => `.${name}`).join('')
+        : '';
+      return `${tag}${id}${classes}${dataE2e ? `[data-e2e=${dataE2e}]` : ''}`;
+    }
+
+    function isScrollable(el) {
+      if (!el || typeof el.scrollHeight !== 'number' || typeof el.clientHeight !== 'number') return false;
+      const style = window.getComputedStyle(el);
+      const overflowY = style?.overflowY || '';
+      return /(auto|scroll|overlay)/i.test(overflowY) && el.scrollHeight > el.clientHeight + 40;
+    }
+
+    function getMetrics(el) {
+      if (!el) {
+        const root = document.scrollingElement || document.documentElement;
+        return {
+          scrollTop: root?.scrollTop || window.scrollY || 0,
+          scrollHeight: root?.scrollHeight || document.documentElement.scrollHeight || 0,
+          clientHeight: window.innerHeight || root?.clientHeight || 0,
+        };
+      }
+      return {
+        scrollTop: el.scrollTop || 0,
+        scrollHeight: el.scrollHeight || 0,
+        clientHeight: el.clientHeight || 0,
+      };
+    }
+
+    function findScrollableSearchContainer() {
+      const authorLinks = Array.from(document.querySelectorAll('a[href*="/@"]')).slice(0, 30);
+      const candidates = [];
+      const seen = new Set();
+
+      for (const link of authorLinks) {
+        let current = link.parentElement;
+        let depth = 0;
+        while (current && depth < 8) {
+          if (!seen.has(current)) {
+            seen.add(current);
+            candidates.push(current);
+          }
+          current = current.parentElement;
+          depth += 1;
+        }
+      }
+
+      const broadCandidates = Array.from(document.querySelectorAll('main, section, div[role="main"], div[class*="scroll"], div[class*="Scroll"], div[class*="feed"], div[class*="Feed"]')).slice(0, 80);
+      for (const item of broadCandidates) {
+        if (!seen.has(item)) {
+          seen.add(item);
+          candidates.push(item);
+        }
+      }
+
+      const scrollables = candidates
+        .filter((el) => isScrollable(el))
+        .map((el) => ({ el, metrics: getMetrics(el) }))
+        .sort((a, b) => {
+          const scoreA = a.metrics.clientHeight + Math.min(a.metrics.scrollHeight, 50000) / 20;
+          const scoreB = b.metrics.clientHeight + Math.min(b.metrics.scrollHeight, 50000) / 20;
+          return scoreB - scoreA;
+        });
+
+      return scrollables[0]?.el || null;
+    }
+
+    const target = findScrollableSearchContainer();
+    return {
+      targetDescription: describeElement(target),
+      authorCount: document.querySelectorAll('a[href*="/@"]').length,
+      ...getMetrics(target),
+    };
   });
-  try {
-    await page.waitForFunction(
-      (prevHeight) => document.documentElement.scrollHeight > prevHeight,
-      { timeout: merged.scrollPauseMs },
-      previousHeight,
-    );
-  } catch (error) {
-    await sleep(Math.min(merged.scrollPauseMs, 600));
-  }
-  const currentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+
+  await page.evaluate(() => {
+    function isScrollable(el) {
+      if (!el || typeof el.scrollHeight !== 'number' || typeof el.clientHeight !== 'number') return false;
+      const style = window.getComputedStyle(el);
+      const overflowY = style?.overflowY || '';
+      return /(auto|scroll|overlay)/i.test(overflowY) && el.scrollHeight > el.clientHeight + 40;
+    }
+
+    function findScrollableSearchContainer() {
+      const authorLinks = Array.from(document.querySelectorAll('a[href*="/@"]')).slice(0, 30);
+      const candidates = [];
+      const seen = new Set();
+
+      for (const link of authorLinks) {
+        let current = link.parentElement;
+        let depth = 0;
+        while (current && depth < 8) {
+          if (!seen.has(current)) {
+            seen.add(current);
+            candidates.push(current);
+          }
+          current = current.parentElement;
+          depth += 1;
+        }
+      }
+
+      const broadCandidates = Array.from(document.querySelectorAll('main, section, div[role="main"], div[class*="scroll"], div[class*="Scroll"], div[class*="feed"], div[class*="Feed"]')).slice(0, 80);
+      for (const item of broadCandidates) {
+        if (!seen.has(item)) {
+          seen.add(item);
+          candidates.push(item);
+        }
+      }
+
+      const scrollables = candidates
+        .filter((el) => isScrollable(el))
+        .sort((a, b) => {
+          const scoreA = a.clientHeight + Math.min(a.scrollHeight, 50000) / 20;
+          const scoreB = b.clientHeight + Math.min(b.scrollHeight, 50000) / 20;
+          return scoreB - scoreA;
+        });
+
+      return scrollables[0] || null;
+    }
+
+    const target = findScrollableSearchContainer();
+    const step = Math.max(Math.round(window.innerHeight * 1.4), 600);
+    if (target) {
+      target.scrollTop += Math.max(Math.round(target.clientHeight * 0.9), step);
+      target.dispatchEvent(new Event('scroll', { bubbles: true }));
+    } else {
+      window.scrollBy({ top: step, behavior: 'instant' });
+    }
+  });
+
+  await sleep(merged.scrollPauseMs);
+
+  const afterState = await page.evaluate(() => {
+    function describeElement(el) {
+      if (!el) return 'window';
+      const tag = (el.tagName || 'unknown').toLowerCase();
+      const dataE2e = el.getAttribute?.('data-e2e');
+      const id = el.id ? `#${el.id}` : '';
+      const classes = typeof el.className === 'string'
+        ? el.className.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((name) => `.${name}`).join('')
+        : '';
+      return `${tag}${id}${classes}${dataE2e ? `[data-e2e=${dataE2e}]` : ''}`;
+    }
+
+    function isScrollable(el) {
+      if (!el || typeof el.scrollHeight !== 'number' || typeof el.clientHeight !== 'number') return false;
+      const style = window.getComputedStyle(el);
+      const overflowY = style?.overflowY || '';
+      return /(auto|scroll|overlay)/i.test(overflowY) && el.scrollHeight > el.clientHeight + 40;
+    }
+
+    function getMetrics(el) {
+      if (!el) {
+        const root = document.scrollingElement || document.documentElement;
+        return {
+          scrollTop: root?.scrollTop || window.scrollY || 0,
+          scrollHeight: root?.scrollHeight || document.documentElement.scrollHeight || 0,
+          clientHeight: window.innerHeight || root?.clientHeight || 0,
+        };
+      }
+      return {
+        scrollTop: el.scrollTop || 0,
+        scrollHeight: el.scrollHeight || 0,
+        clientHeight: el.clientHeight || 0,
+      };
+    }
+
+    function findScrollableSearchContainer() {
+      const authorLinks = Array.from(document.querySelectorAll('a[href*="/@"]')).slice(0, 30);
+      const candidates = [];
+      const seen = new Set();
+
+      for (const link of authorLinks) {
+        let current = link.parentElement;
+        let depth = 0;
+        while (current && depth < 8) {
+          if (!seen.has(current)) {
+            seen.add(current);
+            candidates.push(current);
+          }
+          current = current.parentElement;
+          depth += 1;
+        }
+      }
+
+      const broadCandidates = Array.from(document.querySelectorAll('main, section, div[role="main"], div[class*="scroll"], div[class*="Scroll"], div[class*="feed"], div[class*="Feed"]')).slice(0, 80);
+      for (const item of broadCandidates) {
+        if (!seen.has(item)) {
+          seen.add(item);
+          candidates.push(item);
+        }
+      }
+
+      const scrollables = candidates
+        .filter((el) => isScrollable(el))
+        .map((el) => ({ el, metrics: getMetrics(el) }))
+        .sort((a, b) => {
+          const scoreA = a.metrics.clientHeight + Math.min(a.metrics.scrollHeight, 50000) / 20;
+          const scoreB = b.metrics.clientHeight + Math.min(b.metrics.scrollHeight, 50000) / 20;
+          return scoreB - scoreA;
+        });
+
+      return scrollables[0]?.el || null;
+    }
+
+    const target = findScrollableSearchContainer();
+    return {
+      targetDescription: describeElement(target),
+      authorCount: document.querySelectorAll('a[href*="/@"]').length,
+      ...getMetrics(target),
+    };
+  });
+
+  const progressed = afterState.scrollTop > beforeState.scrollTop
+    || afterState.scrollHeight > beforeState.scrollHeight
+    || afterState.authorCount > beforeState.authorCount;
+
   return {
-    previousHeight,
-    currentHeight,
-    reachedBottom: currentHeight === previousHeight,
+    targetDescription: afterState.targetDescription || beforeState.targetDescription,
+    previousHeight: beforeState.scrollHeight,
+    currentHeight: afterState.scrollHeight,
+    previousScrollTop: beforeState.scrollTop,
+    currentScrollTop: afterState.scrollTop,
+    previousAuthorCount: beforeState.authorCount,
+    currentAuthorCount: afterState.authorCount,
+    reachedBottom: !progressed,
   };
 }
 
@@ -396,12 +612,34 @@ async function waitForApiQuietWindow(responseState, quietWindowMs, maxWaitMs) {
   }, maxWaitMs, 100);
 }
 
-async function autoScrollProfileForApi(page, responseState, maxScrolls, settleMs) {
+function countEligibleVideos(videoMap, excludeRecentHours = 0) {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = excludeRecentHours > 0 ? now - excludeRecentHours * 3600 : 0;
+  let count = 0;
+
+  for (const video of videoMap.values()) {
+    if (!video?.id) continue;
+    const createTime = Number(video.createTime) || 0;
+    if (cutoff > 0 && createTime > 0 && createTime > cutoff) continue;
+    count += 1;
+  }
+
+  return count;
+}
+
+async function autoScrollProfileForApi(page, responseState, options = {}) {
+  const targetVideoCount = Math.max(1, Number(options.targetVideoCount) || 30);
+  const settleMs = Number(options.settleMs) || 1200;
+  const excludeRecentHours = Number(options.excludeRecentHours) || 0;
+  const username = normalizeUsername(options.username);
   let previousHeight = 0;
   let unchangedRounds = 0;
+  let previousEligibleCount = countEligibleVideos(responseState.videoMap, excludeRecentHours);
+  let previousApiHits = responseState.apiHits.itemList;
 
-  for (let i = 0; i < maxScrolls; i += 1) {
-    const beforeHits = responseState.apiHits.itemList;
+  while (true) {
+    if (previousEligibleCount >= targetVideoCount) break;
+
     const beforeHeight = await page.evaluate(() => document.documentElement.scrollHeight);
 
     await page.evaluate(() => {
@@ -409,19 +647,31 @@ async function autoScrollProfileForApi(page, responseState, maxScrolls, settleMs
     });
 
     await waitForCondition(async () => {
-      if (responseState.apiHits.itemList > beforeHits) return true;
+      if (responseState.apiHits.itemList > previousApiHits) return true;
       const currentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
       return currentHeight > beforeHeight;
     }, settleMs, 120);
 
     const currentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
-    if (currentHeight === previousHeight) {
+    const currentEligibleCount = countEligibleVideos(responseState.videoMap, excludeRecentHours);
+    const currentApiHits = responseState.apiHits.itemList;
+    const progressed = currentHeight > previousHeight
+      || currentEligibleCount > previousEligibleCount
+      || currentApiHits > previousApiHits;
+
+    const line = `主页继续滚动 @${username || '-'} | 目标视频 ${targetVideoCount} | 可用视频 ${previousEligibleCount} -> ${currentEligibleCount} | 高度 ${beforeHeight} -> ${currentHeight}${progressed ? '' : ' | 当前轮无新增内容'}`;
+    console.log(username ? formatAuthorLog(username, line) : line);
+
+    if (!progressed) {
       unchangedRounds += 1;
       if (unchangedRounds >= 3) break;
     } else {
       unchangedRounds = 0;
     }
+
     previousHeight = currentHeight;
+    previousEligibleCount = currentEligibleCount;
+    previousApiHits = currentApiHits;
   }
 
   await page.evaluate(() => {
@@ -567,7 +817,7 @@ async function fetchAudienceCommentsFromTikwm(username, videos, audienceConfig =
   const debugLogs = [];
   const addDebugLog = (message) => {
     const line = `[受众] @${username} ${message}`;
-    if (debugEnabled) console.log(line);
+    if (debugEnabled) console.log(formatAuthorLog(username, line));
     if (debugLogs.length < MAX_AUDIENCE_DEBUG_LOGS) debugLogs.push(line);
   };
 
@@ -855,7 +1105,12 @@ async function collectUserProfile(page, input, options = {}) {
       domInitial.forEach((video) => mergeVideoMap(responseState.videoMap, video, 1));
     }
 
-    await autoScrollProfileForApi(page, responseState, merged.maxScrolls, merged.scrollSettleMs);
+    await autoScrollProfileForApi(page, responseState, {
+      username,
+      targetVideoCount: merged.targetVideoCount,
+      settleMs: merged.scrollSettleMs,
+      excludeRecentHours: merged.excludeRecentHours,
+    });
     await waitForApiQuietWindow(responseState, Math.min(merged.scrollSettleMs, 800), merged.profileApiWaitMs);
 
     if (responseState.videoMap.size === 0 || responseState.apiHits.itemList === 0) {

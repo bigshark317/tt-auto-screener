@@ -68,6 +68,28 @@ function resolveProjectPath(...segments) {
   return path.join(__dirname, '..', '..', ...segments);
 }
 
+function hashString(input) {
+  const value = String(input || '');
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function colorizeByKey(text, key) {
+  if (!process.stdout.isTTY) return text;
+  const palette = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96];
+  const colorCode = palette[hashString(key) % palette.length];
+  return `\u001b[${colorCode}m${text}\u001b[0m`;
+}
+
+function formatAuthorLog(username, message) {
+  const normalized = String(username || '').replace(/^@/, '') || 'unknown';
+  return colorizeByKey(message, normalized);
+}
+
 module.exports = {
   sleep,
   ensureDir,
@@ -78,4 +100,6 @@ module.exports = {
   formatNumber,
   formatDate,
   resolveProjectPath,
+  colorizeByKey,
+  formatAuthorLog,
 };

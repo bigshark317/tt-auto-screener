@@ -4,6 +4,8 @@ module.exports = {
     url: 'https://www.tiktok.com/search/video?q=%23tech&t=1777477567556',
     // 是否开启持续采集模式；true 时会边滚动边发现作者、边进入主页分析，直到你手动停止。
     infinite: true,
+    // 同时并行分析多少个作者主页；每个并行槽位会占用一个独立页面。
+    parallelAuthors: 2,
     // 非持续模式下，目标发现多少个候选作者后停止继续采集。
     targetCount: 30,
     // 非持续模式下，连续多少轮没拿到足够新作者后结束搜索采集。
@@ -34,10 +36,8 @@ module.exports = {
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   },
   scroll: {
-    // 作者主页最多滚动多少次；滚得越多，抓到的视频通常越多，但速度也会更慢。
-    maxProfileScrolls: 5,
     // 每次滚动后的统一等待时间，单位毫秒；同时用于搜索页和主页的懒加载缓冲。
-    scrollWaitMs: 1200,
+    scrollWaitMs: 1000,
     // 页面刚打开或滚动后，最多等多久让接口返回或页面就绪，单位毫秒。
     apiWaitMs: 5000,
   },
@@ -46,8 +46,6 @@ module.exports = {
     outputDir: '../output',
     // 主导出是否只保留满足等级条件的账号；false 时会把全部结果作为主导出。
     qualifiedOnly: true,
-    // 详细 JSON 明细文件名，保存完整分析结果，便于后续排查和二次处理。
-    detailJsonName: 'last_run_details.json',
   },
   rules: {
     // 排除最近多少小时内发布的视频；这些视频通常播放量还不稳定，不参与等级计算。

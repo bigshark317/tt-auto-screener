@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { ensureDir, formatDate } = require('./helpers');
+const { ensureDir } = require('./helpers');
 const { createEmptyState, hydrateState, snapshotState } = require('./state-store');
 
 const CHECKPOINT_META_SHEET = '断点统计';
@@ -236,45 +236,6 @@ function createQualifiedLiveWriter(outputDir, options = {}) {
   };
 }
 
-function exportRows(outputDir, rows, options = {}) {
-  ensureDir(outputDir);
-  const exportQualifiedOnly = options.exportQualifiedOnly !== false;
-  const tierOrder = Array.isArray(options.tierOrder) ? options.tierOrder : [];
-  const tierLabelMap = options.tierLabelMap || {};
-
-  const timestamp = formatDate();
-  const xlsxPath = path.join(outputDir, `tiktok_qualified_${timestamp}.xlsx`);
-  const fullXlsxPath = path.join(outputDir, `tiktok_full_${timestamp}.xlsx`);
-
-  const qualifiedRows = rows.filter((row) => row.是否合格 === '合格');
-  const failedRows = rows.filter((row) => row.是否合格 !== '合格');
-  const primaryRows = exportQualifiedOnly ? qualifiedRows : rows;
-
-  const workbook = XLSX.utils.book_new();
-  const primarySheet = buildSheet(primaryRows.length > 0 ? primaryRows : [{ 提示: exportQualifiedOnly ? '无合格账号' : '无结果' }]);
-  XLSX.utils.book_append_sheet(workbook, primarySheet, exportQualifiedOnly ? '合格账号' : '全部结果');
-  XLSX.writeFile(workbook, xlsxPath);
-
-  const fullWorkbook = XLSX.utils.book_new();
-  const allSheet = buildSheet(rows.length > 0 ? rows : [{ 提示: '无结果' }]);
-  const qualifiedSheet = buildSheet(qualifiedRows.length > 0 ? qualifiedRows : [{ 提示: '无合格账号' }]);
-  const failedSheet = buildSheet(failedRows.length > 0 ? failedRows : [{ 提示: '无失败或未达标账号' }]);
-  XLSX.utils.book_append_sheet(fullWorkbook, allSheet, '全部结果');
-  XLSX.utils.book_append_sheet(fullWorkbook, qualifiedSheet, '合格账号');
-  XLSX.utils.book_append_sheet(fullWorkbook, failedSheet, '未达标账号');
-  appendGroupedSheets(fullWorkbook, groupRowsByLevel(qualifiedRows, tierOrder, tierLabelMap));
-  XLSX.writeFile(fullWorkbook, fullXlsxPath);
-
-  if (exportQualifiedOnly) {
-    const qualifiedWorkbook = XLSX.utils.book_new();
-    appendGroupedSheets(qualifiedWorkbook, groupRowsByLevel(qualifiedRows, tierOrder, tierLabelMap));
-    XLSX.writeFile(qualifiedWorkbook, xlsxPath);
-  }
-
-  return { xlsxPath, fullXlsxPath, qualifiedCount: qualifiedRows.length, totalCount: rows.length };
-}
-
 module.exports = {
   createQualifiedLiveWriter,
-  exportRows,
 };

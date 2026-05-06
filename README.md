@@ -112,6 +112,7 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
 - `search`:
   - `url`: 搜索页链接
   - `infinite`: 是否无限滚动
+  - `parallelAuthors`: 同时并行分析多少个作者主页
   - `targetCount`: 非无限模式下目标发现作者数
   - `searchScrolls`: 非无限模式下最大空转轮数
   - `idleRounds`: 无限模式下连续多少轮无新作者就刷新搜索页
@@ -122,7 +123,6 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
   - `viewport.width` / `viewport.height`: 浏览器窗口尺寸
   - `userAgent`: 浏览器 UA
 - `scroll`:
-  - `maxProfileScrolls`: 主页最多滚动次数
   - `scrollWaitMs`: 每次滚动后的统一等待时间
   - `apiWaitMs`: 页面打开或滚动后，最多等多久让接口返回或页面就绪
 - `rules`:
@@ -133,6 +133,7 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
   - `levels[*].stablePlay`: 稳定播放量门槛
   - `levels[*].minPlay`: 最低播放量门槛
   - `levels[*].recentVideoCount`: 分析最近多少条视频
+  - 作者主页会按 `levels[*].recentVideoCount` 和 `rules.audience.recentVideoCount` 的最大值自动决定滚动目标；如果视频不足，会继续滚到没有新增内容为止
   - `audience.enabled`: 是否启用受众国家筛选
   - `audience.requiredTopCountry`: 主受众国家必须是哪一个
   - `audience.recentVideoCount`: 受众分析最多使用最近多少条视频作为候选
@@ -147,14 +148,10 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
 ## 输出文件
 
 - `output/tiktok_qualified_live.xlsx`
-- `output/tiktok_qualified_时间戳.xlsx`
-- `output/tiktok_full_时间戳.xlsx`
-- `output/last_run_details.json`
 
 其中：
 
 - `tiktok_qualified_live.xlsx` 除了实时合格账号外，还会内置断点信息 sheet，便于直接续跑
-- `last_run_details.json` 保存本次运行结束时的详细分析结果
 
 表格字段包含：
 
@@ -192,8 +189,7 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
 
 - `tiktok_qualified_live.xlsx` 会在运行过程中实时更新合格账号
 - `tiktok_qualified_live.xlsx` 里会额外包含断点 sheet，例如 `断点统计`、`断点_已发现`、`断点_已处理`
-- `tiktok_qualified_*.xlsx` 会按“最高满足等级”拆分多个 sheet
-- `tiktok_full_*.xlsx` 会保留 `全部结果`、`合格账号`、`未达标账号`，并追加每个等级的单独 sheet
+- 整个 `output` 目录默认只保留这一个结果表，不再额外生成时间戳结果文件和 JSON 明细文件
 
 ## 注意
 

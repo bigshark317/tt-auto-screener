@@ -1,5 +1,3 @@
-const fs = require('fs');
-const path = require('path');
 const {
   launchBrowser,
   createPage,
@@ -9,8 +7,8 @@ const {
   scrollSearchResults,
 } = require('./lib/tiktok-scraper');
 const { analyzeProfile } = require('./lib/analyzer');
-const { createQualifiedLiveWriter, exportRows } = require('./lib/exporter');
-const { ensureDir } = require('./lib/helpers');
+const { createQualifiedLiveWriter } = require('./lib/exporter');
+const { ensureDir, formatAuthorLog } = require('./lib/helpers');
 const { loadConfig } = require('./lib/config-loader');
 
 function parseArgs(argv) {
@@ -94,6 +92,34 @@ function createPendingQueue(state) {
   return state.discoveredAuthors.filter((author) => !processed.has(author.username));
 }
 
+function getParallelAuthors(config) {
+  return Math.max(1, Number(config.search?.parallelAuthors) || 1);
+}
+
+function getProfileTargetVideoCount(config) {
+  const levelCounts = Array.isArray(config.rules?.levels)
+    ? config.rules.levels.map((level) => Number(level?.recentVideoCount) || 0)
+    : [];
+  const audienceCount = Number(config.rules?.audience?.recentVideoCount) || 0;
+  const allCounts = [...levelCounts, audienceCount].filter((count) => count > 0);
+  return allCounts.length > 0 ? Math.max(...allCounts) : 30;
+}
+
+function formatQueueStatus(state, options = {}) {
+  const pendingCount = Math.max(0, Number(options.pendingCount) || 0);
+  const inFlightCount = Math.max(0, Number(options.inFlightCount) || 0);
+  const newDiscovered = Math.max(0, Number(options.newDiscovered) || 0);
+  const extra = [];
+
+  extra.push(`待分析 ${pendingCount}`);
+  extra.push(`并行中 ${inFlightCount}`);
+  extra.push(`已处理 ${state.stats.processed}`);
+  if (newDiscovered > 0) extra.push(`新发现 ${newDiscovered}`);
+  extra.push(`累计发现 ${state.stats.discovered}`);
+
+  return extra.join(' | ');
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const config = loadConfig(args.config);
@@ -119,7 +145,6 @@ async function main() {
   const state = liveWriter.state;
   updateStateStats(state);
   const runRows = [];
-  const runDetails = [];
 
   if (state.searchUrl && state.searchUrl !== config.search.url) {
     throw new Error(`实时表格中的断点搜索链接与当前配置不一致，请继续使用同一个 --url，或先清理旧的实时表格\nlive: ${state.searchUrl}\ncurrent: ${config.search.url}`);
@@ -128,7 +153,6 @@ async function main() {
   let stopRequested = false;
   let idleRounds = 0;
   let processedThisRun = 0;
-  const processPerDiscoveryRound = 1;
 
   const handleSigint = () => {
     if (!stopRequested) {
@@ -141,6 +165,8 @@ async function main() {
   console.log(`配置文件: ${config.__meta.configPath}`);
   console.log(`准备从搜索页采集作者: ${config.search.url}`);
   console.log(`断点已内置在: ${liveWriter.xlsxPath}`);
+  console.log(`作者并行分析数: ${getParallelAuthors(config)}`);
+  console.log(`作者主页目标视频数: ${getProfileTargetVideoCount(config)}`);
 
   const browserOptions = {
     headless: config.browser.headless,
@@ -162,11 +188,97 @@ async function main() {
 
   const browser = await launchBrowser(browserOptions);
   const searchPage = await createPage(browser, pageOptions);
-  const profilePage = await createPage(browser, pageOptions);
+  const parallelAuthors = getParallelAuthors(config);
+  const profileTargetVideoCount = getProfileTargetVideoCount(config);
+  const profilePages = await Promise.all(
+    Array.from({ length: parallelAuthors }, () => createPage(browser, pageOptions)),
+  );
   try {
+    await searchPage.bringToFront();
     await openSearchPage(searchPage, config.search.url, pageOptions);
 
     while (!stopRequested) {
+      let queue = createPendingQueue(state);
+      while (queue.length > 0 && !stopRequested) {
+        if (config.search.maxProcessed > 0 && processedThisRun >= config.search.maxProcessed) {
+          stopRequested = true;
+          break;
+        }
+        const remaining = config.search.maxProcessed > 0
+          ? Math.max(0, config.search.maxProcessed - processedThisRun)
+          : queue.length;
+        const batchSize = Math.min(parallelAuthors, queue.length, remaining);
+        const batchAuthors = queue.slice(0, batchSize);
+        console.log(
+          `开始并行分析 | ${formatQueueStatus(state, {
+            pendingCount: Math.max(0, queue.length - batchSize),
+            inFlightCount: batchSize,
+          })}`,
+        );
+
+        batchAuthors.forEach((author, index) => {
+          const currentIndex = state.stats.processed + index + 1;
+          console.log(formatAuthorLog(author.username, `[${currentIndex}] 开始分析 @${author.username}`));
+        });
+
+        const batchResults = await Promise.all(
+          batchAuthors.map(async (author, index) => {
+            const username = author.username;
+            try {
+              const profile = await collectUserProfile(profilePages[index], username, {
+                timeoutMs: config.browser.timeoutMs,
+                scrollSettleMs: config.scroll.scrollWaitMs,
+                profileApiWaitMs: config.scroll.apiWaitMs,
+                targetVideoCount: profileTargetVideoCount,
+                excludeRecentHours: config.rules.excludeRecentHours,
+                audience: {
+                  ...(config.rules.audience || {}),
+                  excludeRecentHours: config.rules.excludeRecentHours,
+                },
+              });
+              const { result, row } = analyzeProfile(profile, config.rules);
+              row.来源搜索页 = config.search.url;
+              row.来源视频链接 = author.sourceVideoUrl || '';
+              row.搜索页摘录 = author.sourceText || '';
+              return { ok: true, author, username, result, row };
+            } catch (error) {
+              const message = error && error.message ? error.message : String(error);
+              return { ok: false, author, username, message };
+            }
+          }),
+        );
+
+        for (const item of batchResults) {
+          if (item.ok) {
+            runRows.push(item.row);
+            if (item.row.是否合格 === '合格') {
+              state.stats.qualified += 1;
+            } else {
+              state.stats.failed += 1;
+            }
+            if (liveWriter.append(item.row)) {
+              console.log(`实时写入合格账号: ${liveWriter.xlsxPath}`);
+            }
+            const reasonSuffix = item.result.decisionReason ? ` | 原因 ${item.result.decisionReason}` : '';
+            console.log(formatAuthorLog(item.username, `完成 @${item.username} | 受众 ${item.row.主受众国家 || '-'} ${item.row.主受众国家占比} | 粉丝 ${item.row.粉丝量展示} | 最低播放 ${item.row.最低播放量展示} | 稳定播放 ${item.row.稳定播放量展示} | ${item.row.是否合格}${reasonSuffix}`));
+          } else {
+            console.error(formatAuthorLog(item.username, `抓取失败 @${item.username}: ${item.message}`));
+            runRows.push(buildFailureRow(item.username, config.search.url, item.author, item.message));
+            state.stats.failed += 1;
+          }
+
+          state.processedUsernames.push(item.username);
+          processedThisRun += 1;
+        }
+
+        updateStateStats(state);
+        liveWriter.saveCheckpoint(state);
+        queue = createPendingQueue(state);
+      }
+
+      if (stopRequested) break;
+
+      await searchPage.bringToFront();
       const batch = await extractAuthorsFromCurrentSearchViewport(searchPage);
       const newDiscovered = upsertDiscoveredAuthors(state, batch);
       liveWriter.saveCheckpoint(state);
@@ -177,65 +289,25 @@ async function main() {
 
       if (newDiscovered > 0) {
         idleRounds = 0;
-        console.log(`本轮新增作者 ${newDiscovered} 个，累计发现 ${state.stats.discovered} 个，已处理 ${state.stats.processed} 个`);
-      } else {
-        idleRounds += 1;
+        console.log(
+          `搜索页提取完成 | ${formatQueueStatus(state, {
+            pendingCount: createPendingQueue(state).length,
+            inFlightCount: 0,
+            newDiscovered,
+          })}`,
+        );
+        continue;
       }
 
-      let queue = createPendingQueue(state);
-      let processedThisRound = 0;
-      while (queue.length > 0 && !stopRequested && processedThisRound < processPerDiscoveryRound) {
-        if (config.search.maxProcessed > 0 && processedThisRun >= config.search.maxProcessed) {
-          stopRequested = true;
-          break;
-        }
+      console.log(
+        `搜索页提取完成 | ${formatQueueStatus(state, {
+          pendingCount: createPendingQueue(state).length,
+          inFlightCount: 0,
+          newDiscovered: 0,
+        })}`,
+      );
 
-        const author = queue.shift();
-        const username = author.username;
-        const currentIndex = state.stats.processed + 1;
-        console.log(`[${currentIndex}] 开始分析 @${username}`);
-
-        try {
-          const profile = await collectUserProfile(profilePage, username, {
-            timeoutMs: config.browser.timeoutMs,
-            maxScrolls: config.scroll.maxProfileScrolls,
-            scrollSettleMs: config.scroll.scrollWaitMs,
-            profileApiWaitMs: config.scroll.apiWaitMs,
-            audience: {
-              ...(config.rules.audience || {}),
-              excludeRecentHours: config.rules.excludeRecentHours,
-            },
-          });
-          const { result, row } = analyzeProfile(profile, config.rules);
-          row.来源搜索页 = config.search.url;
-          row.来源视频链接 = author.sourceVideoUrl || '';
-          row.搜索页摘录 = author.sourceText || '';
-          runRows.push(row);
-          runDetails.push({ ...result, source: author });
-          if (row.是否合格 === '合格') {
-            state.stats.qualified += 1;
-          } else {
-            state.stats.failed += 1;
-          }
-          if (liveWriter.append(row)) {
-            console.log(`实时写入合格账号: ${liveWriter.xlsxPath}`);
-          }
-          const reasonSuffix = result.decisionReason ? ` | 原因 ${result.decisionReason}` : '';
-          console.log(`完成 @${username} | 受众 ${row.主受众国家 || '-'} ${row.主受众国家占比} | 粉丝 ${row.粉丝量展示} | 最低播放 ${row.最低播放量展示} | 稳定播放 ${row.稳定播放量展示} | ${row.是否合格}${reasonSuffix}`);
-        } catch (error) {
-          const message = error && error.message ? error.message : String(error);
-          console.error(`抓取失败 @${username}: ${message}`);
-          runRows.push(buildFailureRow(username, config.search.url, author, message));
-          state.stats.failed += 1;
-        }
-
-        state.processedUsernames.push(username);
-        processedThisRun += 1;
-        processedThisRound += 1;
-        updateStateStats(state);
-        liveWriter.saveCheckpoint(state);
-        queue = createPendingQueue(state);
-      }
+      idleRounds += 1;
 
       if (!config.search.infinite) {
         if (state.stats.discovered >= config.search.targetCount && createPendingQueue(state).length === 0) break;
@@ -248,28 +320,26 @@ async function main() {
       }
 
       if (stopRequested) break;
-      await scrollSearchResults(searchPage, { scrollPauseMs: config.scroll.scrollWaitMs });
+      await searchPage.bringToFront();
+      const scrollResult = await scrollSearchResults(searchPage, { scrollPauseMs: config.scroll.scrollWaitMs });
+      console.log(
+        `搜索页继续滚动 | ${formatQueueStatus(state, {
+          pendingCount: createPendingQueue(state).length,
+          inFlightCount: 0,
+        })} | 容器 ${scrollResult.targetDescription} | scrollTop ${scrollResult.previousScrollTop} -> ${scrollResult.currentScrollTop} | 高度 ${scrollResult.previousHeight} -> ${scrollResult.currentHeight} | 作者 ${scrollResult.previousAuthorCount} -> ${scrollResult.currentAuthorCount}${scrollResult.reachedBottom ? ' | 当前轮无新增内容' : ''}`,
+      );
     }
   } finally {
     liveWriter.saveCheckpoint(state);
     await searchPage.close();
-    await profilePage.close();
+    await Promise.all(profilePages.map((page) => page.close()));
     await browser.close();
     process.off('SIGINT', handleSigint);
   }
 
-  const { xlsxPath, fullXlsxPath, qualifiedCount, totalCount } = exportRows(config.export.outputDir, runRows, {
-    exportQualifiedOnly: config.export.qualifiedOnly,
-    tierOrder,
-    tierLabelMap,
-  });
-  const detailPath = path.join(config.export.outputDir, config.export.detailJsonName);
-  fs.writeFileSync(detailPath, JSON.stringify(runDetails, null, 2));
-
-  console.log(`导出完成: ${xlsxPath}`);
-  console.log(`完整结果工作簿: ${fullXlsxPath}`);
-  console.log(`明细JSON: ${detailPath}`);
-  console.log(`实时合格XLSX: ${liveWriter.xlsxPath}`);
+  const qualifiedCount = runRows.filter((row) => row.是否合格 === '合格').length;
+  const totalCount = runRows.length;
+  console.log(`结果表: ${liveWriter.xlsxPath}`);
   console.log(`搜索页累计候选作者: ${state.stats.discovered}`);
   console.log(`已处理作者: ${state.stats.processed}`);
   console.log(`合格账号: ${qualifiedCount}/${totalCount}`);
