@@ -90,6 +90,27 @@ function formatAuthorLog(username, message) {
   return colorizeByKey(message, normalized);
 }
 
+function extractEmailsFromText(text) {
+  if (!text) return [];
+  const matches = String(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || [];
+  const seen = new Set();
+  const result = [];
+
+  for (const raw of matches) {
+    const email = String(raw || '')
+      .trim()
+      .replace(/^[<(【\[]+/, '')
+      .replace(/[>),，。；;:!！？、】【\]]+$/g, '')
+      .toLowerCase();
+
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    result.push(email);
+  }
+
+  return result;
+}
+
 module.exports = {
   sleep,
   ensureDir,
@@ -102,4 +123,5 @@ module.exports = {
   resolveProjectPath,
   colorizeByKey,
   formatAuthorLog,
+  extractEmailsFromText,
 };

@@ -7,6 +7,7 @@ const {
   normalizeUsername,
   resolveProjectPath,
   formatAuthorLog,
+  extractEmailsFromText,
 } = require('./helpers');
 
 const DEFAULTS = {
@@ -711,15 +712,62 @@ async function extractUserFromPage(page) {
       || document.querySelector('[data-e2e="user-title"]')?.textContent?.trim()
       || '';
 
+    const signature = ssrUser?.signature
+      || document.querySelector('[data-e2e="user-bio"]')?.textContent?.trim()
+      || document.querySelector('h2[data-e2e="user-bio"]')?.textContent?.trim()
+      || '';
+
     const followerText = document.querySelector('[data-e2e="followers-count"]')?.textContent?.trim() || '';
 
     return {
       ...ssrUser,
       uniqueId,
       nickname,
+      signature,
       followerCount: ssrUser?.followerCount || parseCount(followerText),
     };
   });
+}
+
+async function extractProfileEmail(page, userInfo = {}) {
+  const snapshot = await page.evaluate(() => {
+    const ssrEl = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
+    let ssrSignature = '';
+    if (ssrEl) {
+      try {
+        const ssr = JSON.parse(ssrEl.textContent || '{}');
+        ssrSignature = ssr?.__DEFAULT_SCOPE__?.['webapp.user-detail']?.userInfo?.user?.signature || '';
+      } catch (error) {}
+    }
+
+    const bioTexts = [
+      document.querySelector('[data-e2e="user-bio"]')?.textContent?.trim(),
+      document.querySelector('h2[data-e2e="user-bio"]')?.textContent?.trim(),
+      document.querySelector('div[data-e2e="user-bio"]')?.textContent?.trim(),
+    ].filter(Boolean);
+
+    const mailtoEmails = Array.from(document.querySelectorAll('a[href^="mailto:"]'))
+      .map((link) => link.getAttribute('href') || '')
+      .map((href) => href.replace(/^mailto:/i, '').split('?')[0].trim())
+      .filter(Boolean);
+
+    return {
+      ssrSignature,
+      bioTexts,
+      mailtoEmails,
+      pageText: (document.body?.innerText || '').slice(0, 20000),
+    };
+  });
+
+  const candidates = [
+    ...(Array.isArray(snapshot.mailtoEmails) ? snapshot.mailtoEmails : []),
+    ...extractEmailsFromText(userInfo?.signature || ''),
+    ...extractEmailsFromText(snapshot.ssrSignature || ''),
+    ...((Array.isArray(snapshot.bioTexts) ? snapshot.bioTexts : []).flatMap((text) => extractEmailsFromText(text))),
+    ...extractEmailsFromText(snapshot.pageText || ''),
+  ];
+
+  return candidates[0] || '';
 }
 
 async function extractVideosFromDom(page) {
@@ -1357,6 +1405,7 @@ async function collectUserProfile(page, input, options = {}) {
       username,
       profileUrl: targetUrl,
       userInfo: responseState.userInfo || { uniqueId: username, followerCount: 0 },
+      contactEmail: await extractProfileEmail(page, responseState.userInfo),
       videos,
       audience,
       apiHits: responseState.apiHits,

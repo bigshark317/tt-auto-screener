@@ -52,6 +52,7 @@ function buildRow(result) {
 
   return {
     用户名: result.username,
+    邮箱: result.contactEmail || result.userInfo?.email || '',
     昵称: result.userInfo?.nickname || '',
     主页链接: result.profileUrl,
     粉丝量: followerCount,

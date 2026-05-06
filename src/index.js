@@ -30,6 +30,7 @@ function parseArgs(argv) {
 function buildFailureRow(username, searchUrl, author, message) {
   return {
     用户名: username,
+    邮箱: '',
     昵称: '',
     主页链接: `https://www.tiktok.com/@${username}`,
     粉丝量: 0,

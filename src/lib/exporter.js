@@ -15,6 +15,7 @@ const CHECKPOINT_SHEET_NAMES = new Set([
 
 const PREFERRED_COLUMN_ORDER = [
   '用户名',
+  '邮箱',
   '昵称',
   '主页链接',
   '主受众国家',
