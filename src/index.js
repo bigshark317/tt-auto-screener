@@ -167,6 +167,7 @@ async function main() {
   console.log(`断点已内置在: ${liveWriter.xlsxPath}`);
   console.log(`作者并行分析数: ${getParallelAuthors(config)}`);
   console.log(`作者主页目标视频数: ${getProfileTargetVideoCount(config)}`);
+  console.log(`启动时注入 Cookie 数: ${Array.isArray(config.browser.cookies) ? config.browser.cookies.length : 0}`);
 
   const browserOptions = {
     headless: config.browser.headless,
@@ -181,6 +182,7 @@ async function main() {
     viewport: config.browser.viewport,
     extraHttpHeaders: config.browser.extraHttpHeaders,
     userAgent: config.browser.userAgent,
+    cookies: config.browser.cookies,
     searchReadyTimeoutMs: config.scroll.apiWaitMs,
     profileApiWaitMs: config.scroll.apiWaitMs,
     scrollSettleMs: config.scroll.scrollWaitMs,

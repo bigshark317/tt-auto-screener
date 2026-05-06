@@ -15,6 +15,7 @@
 - 监听 `/api/user/detail` 和 `/api/post/item_list`
 - SSR 和 DOM 双重兜底，尽量补全粉丝数和视频播放量
 - 当页面未返回视频列表时，会尝试走 TikWM 公开接口做补充
+- 支持启动时主动注入 TikTok cookie
 - 复用原插件的大促模式筛选规则
 - 导出 `xlsx` 和抓取明细 `json`
 - 浏览器尺寸、门槛和最近视频条数都可通过配置文件调整
@@ -48,6 +49,7 @@ npm install
 - `search.url`: 搜索页链接
 - `browser.viewport.width` / `browser.viewport.height`: 浏览器尺寸
 - `browser.headless`: 是否无头运行
+- `browser.cookies`: 启动时注入的 TikTok Cookie 数组
 - `search.infinite`: 是否无限滚动
 - `search.targetCount`: 非无限模式下目标作者数
 - `rules.levels`: 等级配置数组
@@ -63,6 +65,33 @@ npm install
 
 ```bash
 npm start
+```
+
+## Cookie 用法
+
+- 浏览器始终复用同一个本地目录 `.chrome-data`
+- 如果 `browser.cookies` 有内容，脚本会在每个页面打开前主动注入这些 cookie
+- 如果 `browser.cookies` 为空，脚本就不额外注入，直接使用当前浏览器目录里已有状态
+
+配置示例：
+
+```js
+browser: {
+  cookies: [
+    {
+      name: 'sessionid',
+      value: 'xxx',
+      domain: '.tiktok.com',
+      path: '/',
+    },
+    {
+      name: 'sid_tt',
+      value: 'xxx',
+      domain: '.tiktok.com',
+      path: '/',
+    },
+  ],
+}
 ```
 
 ## 使用步骤
@@ -122,6 +151,7 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
   - `timeoutMs`: 页面超时
   - `viewport.width` / `viewport.height`: 浏览器窗口尺寸
   - `userAgent`: 浏览器 UA
+  - `cookies`: 启动时注入的 Puppeteer Cookie 数组；留空则不注入
 - `scroll`:
   - `scrollWaitMs`: 每次滚动后的统一等待时间
   - `apiWaitMs`: 页面打开或滚动后，最多等多久让接口返回或页面就绪
@@ -196,4 +226,5 @@ node src/index.js --config=./config/default.config.js --url="https://www.tiktok.
 - TikTok 可能因地区、风控、验证码导致接口返回不稳定。
 - TikWM 公开接口有时会被 Cloudflare 拦截，兜底能力不保证 100% 可用。
 - 如果遇到验证码或页面异常，先使用非 headless 模式排查。
+- `browser.cookies` 建议填写 TikTok 导出的完整 cookie 对象，至少包含 `name`、`value`，最好同时带上 `domain` 和 `path`。
 - 断点续跑要求 `--url` 与实时 Excel 内记录的搜索链接保持一致。

@@ -43,7 +43,6 @@ function loadConfig(configPathArg) {
   };
 
   merged.export.outputDir = resolveMaybeRelative(configDir, merged.export.outputDir);
-
   return merged;
 }
 

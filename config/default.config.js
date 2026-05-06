@@ -1,7 +1,7 @@
 module.exports = {
   search: {
     // TikTok 搜索页地址，脚本会从这里持续滚动并提取作者主页。
-    url: 'https://www.tiktok.com/search/video?q=%23tech&t=1777477567556',
+    url: "https://www.tiktok.com/search/video?q=%23tech&t=1777477567556",
     // 是否开启持续采集模式；true 时会边滚动边发现作者、边进入主页分析，直到你手动停止。
     infinite: true,
     // 同时并行分析多少个作者主页；每个并行槽位会占用一个独立页面。
@@ -30,10 +30,20 @@ module.exports = {
     },
     extraHttpHeaders: {
       // 请求头语言设置，尽量让页面结构和文案保持稳定。
-      'accept-language': 'en-US,en;q=0.9',
+      "accept-language": "en-US,en;q=0.9",
     },
     // 浏览器 UA，部分页面结构和风控表现会受 UA 影响。
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    // 启动时如果这里有 cookie，就主动注入到每个页面；不填则按当前浏览器目录里的状态继续跑。
+    cookies: [
+      {
+        name: "sessionid",
+        value: "",
+        domain: ".tiktok.com",
+        path: "/",
+      },
+    ],
   },
   scroll: {
     // 每次滚动后的统一等待时间，单位毫秒；同时用于搜索页和主页的懒加载缓冲。
@@ -43,7 +53,7 @@ module.exports = {
   },
   export: {
     // 导出目录；xlsx 和详细 json 会写到这里，断点信息也会内置在实时 Excel 里。
-    outputDir: '../output',
+    outputDir: "../output",
     // 主导出是否只保留满足等级条件的账号；false 时会把全部结果作为主导出。
     qualifiedOnly: true,
   },
@@ -54,7 +64,7 @@ module.exports = {
       // 是否启用受众国家筛选；true 时会抓取评论用户地区并统计主受众国家。
       enabled: true,
       // 要求主受众国家必须是哪一个；填写 US 表示只保留受众国家中美国占比最高的用户。
-      requiredTopCountry: 'US',
+      requiredTopCountry: "US",
       // 受众分析最多取最近多少条视频作为候选评论来源。
       recentVideoCount: 30,
       // 会优先按评论数排序，只抓前多少条视频的评论。
@@ -67,12 +77,12 @@ module.exports = {
       sampleTarget: 200,
       tikwm: {
         // TikWM 付费接口地址；当前脚本只走这条链路。
-        paidBaseUrl: 'https://api.tikwmapi.com',
+        paidBaseUrl: "https://api.tikwmapi.com",
         // TikWM 付费接口 key；这里默认对齐根目录插件配置。
-        apiKey: 'c80f5c0c36383df2f63b2466f2e4ea6c',
+        apiKey: "c80f5c0c36383df2f63b2466f2e4ea6c",
         // 接口路径映射；当 TikWM 路径和原始调用路径不一致时在这里转换。
         pathMap: {
-          '/feed/search': '/search/feed',
+          "/feed/search": "/search/feed",
         },
       },
     },
@@ -80,9 +90,9 @@ module.exports = {
     levels: [
       {
         // 等级唯一标识，用于程序内部识别。
-        key: 'top',
+        key: "top",
         // 等级名称，会显示在表格和 Excel sheet 中。
-        label: '头部 KOL',
+        label: "头部 KOL",
         // 稳定播放计算比例；0.9 表示按“90%稳定播放”口径计算，0.8 表示按“80%稳定播放”口径计算。
         stablePercent: 0.9,
         // 粉丝量门槛；达到这个值才可能命中该等级。
@@ -96,9 +106,9 @@ module.exports = {
       },
       {
         // 等级唯一标识，用于程序内部识别。
-        key: 'mid',
+        key: "mid",
         // 等级名称，会显示在表格和 Excel sheet 中。
-        label: '普通 KOL',
+        label: "普通 KOL",
         // 稳定播放计算比例；0.9 表示按“90%稳定播放”口径计算，0.8 表示按“80%稳定播放”口径计算。
         stablePercent: 0.9,
         // 粉丝量门槛；达到这个值才可能命中该等级。
@@ -111,10 +121,10 @@ module.exports = {
         recentVideoCount: 30,
       },
       {
-         // 等级唯一标识，用于程序内部识别。
-        key: 'little',
+        // 等级唯一标识，用于程序内部识别。
+        key: "little",
         // 等级名称，会显示在表格和 Excel sheet 中。
-        label: '小小号',
+        label: "小小号",
         // 稳定播放计算比例；0.9 表示按“90%稳定播放”口径计算，0.8 表示按“80%稳定播放”口径计算。
         stablePercent: 0.5,
         // 粉丝量门槛；达到这个值才可能命中该等级。
@@ -128,9 +138,9 @@ module.exports = {
       },
       {
         // 等级唯一标识，用于程序内部识别。
-        key: 'tail',
+        key: "tail",
         // 等级名称，会显示在表格和 Excel sheet 中。
-        label: '尾部 KOC',
+        label: "尾部 KOC",
         // 稳定播放计算比例；0.9 表示按“90%稳定播放”口径计算，0.8 表示按“80%稳定播放”口径计算。
         stablePercent: 0.9,
         // 粉丝量门槛；达到这个值才可能命中该等级。

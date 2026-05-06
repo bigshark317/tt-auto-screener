@@ -26,6 +26,7 @@ const DEFAULTS = {
     'accept-language': 'en-US,en;q=0.9',
   },
   userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  cookies: [],
 };
 
 const MAX_AUDIENCE_DEBUG_LOGS = 120;
@@ -39,6 +40,39 @@ const DEFAULT_TIKWM_CONFIG = {
 
 function getChromeDataDir() {
   return resolveProjectPath('.chrome-data');
+}
+
+function normalizeCookie(cookie, fallbackUrl) {
+  if (!cookie || typeof cookie !== 'object') return null;
+  const normalized = { ...cookie };
+
+  if (!normalized.name || normalized.value === undefined || normalized.value === null) return null;
+
+  normalized.name = String(normalized.name).trim();
+  normalized.value = String(normalized.value);
+  if (!normalized.name) return null;
+
+  if (!normalized.url && !normalized.domain) {
+    normalized.url = fallbackUrl;
+  }
+  if (!normalized.path) {
+    normalized.path = '/';
+  }
+
+  return normalized;
+}
+
+function normalizeCookies(cookies = [], fallbackUrl = 'https://www.tiktok.com/') {
+  if (!Array.isArray(cookies)) return [];
+  return cookies
+    .map((cookie) => normalizeCookie(cookie, fallbackUrl))
+    .filter(Boolean);
+}
+
+async function applyCookiesToPage(page, cookies = []) {
+  const normalizedCookies = normalizeCookies(cookies);
+  if (normalizedCookies.length === 0) return;
+  await page.setCookie(...normalizedCookies);
 }
 
 function mergeUserInfo(target, nextInfo) {
@@ -144,6 +178,7 @@ async function createPage(browser, options = {}) {
   page.setDefaultTimeout(merged.timeoutMs);
   await page.setUserAgent(merged.userAgent || DEFAULTS.userAgent);
   await page.setExtraHTTPHeaders(merged.extraHttpHeaders || DEFAULTS.extraHttpHeaders);
+  await applyCookiesToPage(page, merged.cookies);
   return page;
 }
 
