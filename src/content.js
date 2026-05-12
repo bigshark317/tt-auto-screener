@@ -238,11 +238,27 @@ function extractVideosFromDom() {
   return videos;
 }
 
+async function waitForInitialVideos(timeoutMs = 15000) {
+  const startedAt = Date.now();
+  let videos = extractVideosFromDom();
+
+  while (videos.length === 0 && Date.now() - startedAt < timeoutMs) {
+    await sleep(500);
+    videos = extractVideosFromDom();
+  }
+
+  return {
+    videos,
+    timedOut: videos.length === 0,
+  };
+}
+
 async function collectProfile(options = {}) {
   const username = normalizeUsername(options.username || location.pathname.match(/^\/@([^/?#]+)/)?.[1] || '');
   const targetVideoCount = Math.max(1, Number(options.targetVideoCount) || 30);
   const waitMs = Number(options.waitMs) || 1500;
-  let videos = extractVideosFromDom();
+  const initial = await waitForInitialVideos(Number(options.initialVideoTimeoutMs) || 15000);
+  let videos = initial.videos;
   let unchangedRounds = 0;
 
   while (videos.length < targetVideoCount && unchangedRounds < 3) {
@@ -263,6 +279,9 @@ async function collectProfile(options = {}) {
     userInfo,
     videos,
     contactEmail: emails[0] || '',
+    loadState: {
+      initialVideoTimedOut: initial.timedOut,
+    },
     audience: {
       topCountry: '',
       topCountryPercentage: 0,

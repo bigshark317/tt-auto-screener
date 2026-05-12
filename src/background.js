@@ -6,6 +6,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let state = createInitialState();
 let runToken = 0;
+let activeProfileChain = Promise.resolve();
 
 class LocalServiceDisconnectedError extends Error {
   constructor(error) {
@@ -210,6 +211,10 @@ function tabsGet(tabId) {
   return chrome.tabs.get(tabId);
 }
 
+function tabsReload(tabId) {
+  return chrome.tabs.reload(tabId);
+}
+
 function tabsRemove(tabId) {
   return chrome.tabs.remove(tabId).catch(() => {});
 }
@@ -231,6 +236,69 @@ function waitForTabComplete(tabId, timeoutMs = 45000) {
     }
 
     chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+function waitForTabCompleteWithRefresh(tabId, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || 45000;
+  const refreshAfterMs = Number(options.refreshAfterMs) || 3000;
+  const refreshMessage = options.refreshMessage || '';
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let refreshed = false;
+    let timer = null;
+    let refreshTimer = null;
+
+    function cleanup() {
+      clearTimeout(timer);
+      clearTimeout(refreshTimer);
+      chrome.tabs.onUpdated.removeListener(listener);
+    }
+
+    function finish(callback, value) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    }
+
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.status === 'complete') {
+        finish(resolve, { refreshed });
+      }
+    }
+
+    async function refreshIfStuck() {
+      try {
+        const tab = await tabsGet(tabId);
+        if (settled) return;
+        if (tab?.status === 'complete') {
+          finish(resolve, { refreshed });
+          return;
+        }
+
+        refreshed = true;
+        if (refreshMessage) log(refreshMessage);
+        await tabsReload(tabId);
+      } catch (error) {
+        finish(reject, error);
+      }
+    }
+
+    timer = setTimeout(() => {
+      finish(reject, new Error(`等待页面加载超时: tab ${tabId}`));
+    }, timeoutMs);
+
+    refreshTimer = setTimeout(refreshIfStuck, refreshAfterMs);
+    chrome.tabs.onUpdated.addListener(listener);
+
+    tabsGet(tabId)
+      .then((tab) => {
+        if (tab?.status === 'complete') finish(resolve, { refreshed });
+      })
+      .catch((error) => finish(reject, error));
   });
 }
 
@@ -355,30 +423,67 @@ function takeNextAuthors(limit) {
   return authors;
 }
 
+function withActiveProfileTab(task) {
+  const run = () => task();
+  const result = activeProfileChain.then(run, run);
+  activeProfileChain = result.catch(() => {});
+  return result;
+}
+
+async function collectProfileFromTab(tabId, author, profileTargetVideoCount) {
+  const response = await sendToTab(tabId, {
+    type: 'TT_COLLECT_PROFILE',
+    options: {
+      username: author.username,
+      targetVideoCount: profileTargetVideoCount,
+      waitMs: state.config.scroll.profileWaitMs,
+      initialVideoTimeoutMs: 15000,
+    },
+  });
+  if (!response?.ok) throw new Error(response?.error || '主页采集失败');
+  return {
+    ...response.profile,
+    sourceSearchUrl: author.sourceSearchUrl || state.searchUrl,
+    sourceVideoUrl: author.sourceVideoUrl || '',
+    sourceText: author.sourceText || '',
+  };
+}
+
+async function loadAndCollectActiveProfile(tabId, author) {
+  return withActiveProfileTab(async () => {
+    await tabsUpdate(tabId, { active: true });
+    await waitForTabCompleteWithRefresh(tabId, {
+      refreshAfterMs: 3000,
+      refreshMessage: `@${author.username} 主页加载超过 3 秒，自动刷新一次`,
+    });
+    await tabsUpdate(tabId, { active: true });
+    await sleep(800);
+
+    const profileTargetVideoCount = getProfileTargetVideoCount(state.config);
+    let profile = await collectProfileFromTab(tabId, author, profileTargetVideoCount);
+    if ((profile.videos || []).length === 0) {
+      log(`@${author.username} 主页视频未加载，刷新后重试一次`);
+      await tabsReload(tabId);
+      await waitForTabCompleteWithRefresh(tabId, {
+        refreshAfterMs: 3000,
+        refreshMessage: `@${author.username} 主页重试加载超过 3 秒，自动刷新一次`,
+      });
+      await tabsUpdate(tabId, { active: true });
+      await sleep(800);
+      profile = await collectProfileFromTab(tabId, author, profileTargetVideoCount);
+    }
+    if ((profile.videos || []).length === 0) throw new Error('主页视频仍未加载');
+    return profile;
+  });
+}
+
 async function collectAuthor(author) {
   const tab = await tabsCreate({
     url: author.profileUrl,
-    active: Boolean(state.config.search.profileTabActive),
+    active: false,
   });
   try {
-    await waitForTabComplete(tab.id);
-    const profileTargetVideoCount = getProfileTargetVideoCount(state.config);
-    const response = await sendToTab(tab.id, {
-      type: 'TT_COLLECT_PROFILE',
-      options: {
-        username: author.username,
-        targetVideoCount: profileTargetVideoCount,
-        waitMs: state.config.scroll.profileWaitMs,
-      },
-    });
-    if (!response?.ok) throw new Error(response?.error || '主页采集失败');
-
-    const profile = {
-      ...response.profile,
-      sourceSearchUrl: author.sourceSearchUrl || state.searchUrl,
-      sourceVideoUrl: author.sourceVideoUrl || '',
-      sourceText: author.sourceText || '',
-    };
+    const profile = await loadAndCollectActiveProfile(tab.id, author);
     const { result, row } = await analyzeProfileWithServer(profile);
     if (row.是否合格 === '合格') state.rows.push(row);
     state.processed.push(author.username);
