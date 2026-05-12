@@ -1,21 +1,19 @@
 {
   "name": "tt-auto-screener",
-  "version": "1.0.0",
-  "description": "TikTok 搜索页自动筛选脚本",
-  "main": "src/index.js",
+  "version": "3.0.0",
+  "description": "TikTok 达人筛选 Chrome 插件",
   "scripts": {
-    "start": "node src/index.js --config=./config/default.config.js",
-    "login": "node src/login.js --config=./config/default.config.js"
+    "server": "node server/index.js",
+    "check": "node --check server/index.js && node --check server/excel-store.js && node --check server/analyzer.js && node --check src/background.js && node --check src/content.js && node --check src/popup/popup.js && node --check src/shared/analyzer.js && node --check src/shared/config.js"
   },
   "keywords": [
     "tiktok",
-    "puppeteer",
-    "xlsx"
+    "chrome-extension",
+    "screener"
   ],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "puppeteer": "^24.42.0",
     "xlsx": "^0.18.5"
   }
 }

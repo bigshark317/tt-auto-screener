@@ -1,263 +1,184 @@
 # TikTok Auto Screener
 
-把原浏览器插件里的 TikTok 数据获取和大促筛选逻辑抽成独立脚本，使用 `Puppeteer` 从 TikTok 搜索页持续刷视频、提取作者主页、打开主页分析，并导出 Excel。
+这是一个 `Chrome 插件 + 本地 Node 服务` 版 TikTok 达人筛选工具。它不再使用 Puppeteer，也不再打开自动化浏览器登录 TikTok；插件运行在你正常登录的 Chrome 标签页里，本地服务负责把结果和断点写入 Excel。
 
 ## 功能
 
-- 自动打开 TikTok 搜索页并持续滚动
-- 从搜索结果视频里提取作者主页链接
-- 逐个打开作者主页分析
-- 支持无限滚动采集，直到手动停止
-- 支持断点续跑，自动跳过已处理作者
-- 主导出默认只输出合格账号，完整结果继续保留
-- 合格账号命中后可实时写入表格，不必等整轮任务结束
-- 支持等级制筛选，不同等级可配置不同规则和门槛
-- 监听 `/api/user/detail` 和 `/api/post/item_list`
-- SSR 和 DOM 双重兜底，尽量补全粉丝数和视频播放量
-- 当页面未返回视频列表时，会尝试走 TikWM 公开接口做补充
-- 支持启动时主动注入 TikTok cookie
-- 复用原插件的大促模式筛选规则
-- 导出 `xlsx` 和抓取明细 `json`
-- 浏览器尺寸、门槛和最近视频条数都可通过配置文件调整
+- 在 TikTok 搜索页自动滚动并发现作者主页链接
+- 自动打开作者主页并采集昵称、粉丝数、简介邮箱、视频播放量
+- 复用当前 Chrome 的 TikTok 登录态，不需要扫码登录自动化浏览器
+- 按配置好的粉丝量、最低播放、稳定播放规则筛选账号
+- 采集结果和断点自动写入本地 Excel 表格
+- 下次启动时自动从 Excel 读取断点续跑
+- 支持开始/暂停、重置、恢复默认配置
 
 ## 目录
 
 ```text
 tt-auto-screener/
-  config/
-    default.config.js
-  output/
-  src/
+  manifest.json
+  server/
     index.js
-    rules.js
-    lib/
+    excel-store.js
+    analyzer.js
+  src/
+    background.js
+    content.js
+    popup/
+      popup.html
+      popup.css
+      popup.js
+    shared/
+      analyzer.js
+      config.js
+  output/
+    tiktok_qualified_live.xlsx
 ```
 
-## 安装
+## 启动本地服务
+
+插件要把表格写到本机文件、并在服务端执行受众分析，需要先启动本地 Node 服务：
 
 ```bash
 cd "/Users/bytedance/Desktop/BB-达人助手正式版 v2.0 2/tt-auto-screener"
-npm install
+npm run server
 ```
 
-## 配置启动
-
-默认配置文件是 [default.config.js](file:///Users/bytedance/Desktop/BB-达人助手正式版%20v2.0%202/tt-auto-screener/config/default.config.js)。
-
-常用可改项：
-
-- `search.url`: 搜索页链接
-- `browser.viewport.width` / `browser.viewport.height`: 浏览器尺寸
-- `browser.headless`: 是否无头运行
-- `browser.auth.mode`: 登录态模式，支持 `profile` 和 `anonymous`
-- `browser.auth.userDataDir`: 专用 TikTok 登录态目录
-- `browser.auth.cookieFile`: TikTok Cookie 文件路径
-- `search.infinite`: 是否无限滚动
-- `search.targetCount`: 非无限模式下目标作者数
-- `rules.levels`: 等级配置数组
-- `rules.levels[*].minFollowers`: 粉丝门槛
-- `rules.levels[*].stablePercent`: 该等级使用的稳定播放比例
-- `rules.levels[*].stablePlay`: 该等级的稳定播放量门槛
-- `rules.levels[*].minPlay`: 最低播放量门槛
-- `rules.levels[*].recentVideoCount`: 分析最近多少条视频
-- `rules.audience.requiredTopCountry`: 主受众国家必须是哪一个，默认 `US`
-- `rules.excludeRecentHours`: 排除最近多少小时内发布的视频
-
-改完后直接启动：
+如果要启用 TikWM 评论受众分析，启动前先配置环境变量：
 
 ```bash
-npm start
+export TT_TIKWM_API_KEY="你的 TikWM key"
+export TT_TIKWM_BASE_URL="https://api.tikwmapi.com"
+npm run server
 ```
 
-初始化并保存 TikTok 登录态：
+如果你的 TikWM 评论接口路径不同，可以额外配置：
 
 ```bash
-npm run login
+export TT_TIKWM_COMMENT_ENDPOINT="{baseUrl}/api/comment/list?video_id={videoId}&count={count}&cursor=0"
 ```
 
-## 登录态用法
+服务默认监听：
 
-- 当前项目支持两种模式：
-  - `profile`: 优先复用 `browser.auth.userDataDir` 里的本地登录态；如果本地 profile 还不存在，会按配置从 `browser.auth.cookieFile` 导入一次 Cookie 初始化 profile
-  - `anonymous`: 使用无痕隔离上下文访问，不复用本地 profile，也不导入任何 Cookie
-- `profile` 下，后续新页面直接继承这个 profile，不再每个页面重复注入 Cookie
-
-推荐做法：
-
-1. 首次运行时用可见浏览器完成一次 TikTok 登录，保留 `browser.auth.userDataDir`
-2. 后续持续复用这个专用 profile
-3. 如果需要从别的浏览器迁移登录态，再准备 `input/tiktok.cookies.json` 作为初始化兜底
-
-`npm run login` 会：
-
-- 强制使用 `profile` 模式
-- 打开可见浏览器
-- 进入 TikTok 登录页等待你手动登录
-- 检测到登录成功后自动倒计时 5 秒退出
-- 将状态保存到 `browser.auth.userDataDir`
-
-Cookie 文件支持两种格式：
-
-```json
-[
-  {
-    "name": "sessionid",
-    "value": "xxx",
-    "domain": ".tiktok.com",
-    "path": "/"
-  }
-]
+```text
+http://127.0.0.1:17321
 ```
 
-```json
-{
-  "cookies": [
-    {
-      "name": "sessionid",
-      "value": "xxx",
-      "domain": ".tiktok.com",
-      "path": "/"
-    }
-  ]
-}
+Excel 默认写入：
+
+```text
+output/tiktok_qualified_live.xlsx
 ```
 
-## 使用步骤
+## 安装插件
 
-使用默认配置运行：
+1. 打开 Chrome，访问 `chrome://extensions/`
+2. 打开右上角 `开发者模式`
+3. 点击 `加载已解压的扩展程序`
+4. 选择本项目目录：
 
-```bash
-npm start
+```text
+/Users/bytedance/Desktop/BB-达人助手正式版 v2.0 2/tt-auto-screener
 ```
 
-如果要切换另一份配置文件：
+## 使用方式
 
-```bash
-node src/index.js --config=/absolute/path/my.config.js
-```
+1. 用正常 Chrome 登录 TikTok
+2. 打开 TikTok 探索页，默认是 `https://www.tiktok.com/explore`
+3. 点击浏览器右上角插件图标
+4. 填入或确认搜索页链接
+5. 确认 popup 里 `本地服务` 显示 `已连接`
+6. 在 popup 的 `配置` 区域调整搜索、滚动、受众、等级规则
+7. 配置项失焦后会自动保存，直接点击 `开始`
+8. 运行中主按钮会变成 `暂停`，需要暂停时再点一次
+9. 下次打开插件时会自动从 Excel 读取断点，主按钮显示 `继续`，点击即可接着跑
 
-也可以临时覆盖搜索页链接：
+## 插件配置
 
-```bash
-node src/index.js --config=./config/default.config.js --url="https://www.tiktok.com/search/video?q=%23tech&t=1777477567556"
-```
+原默认配置已经迁移到 popup 的 `配置` 区域：
 
-无限滚动模式：
+- `本地服务地址`: 默认 `http://127.0.0.1:17321`
+- `搜索页链接`: TikTok 抓取入口 URL，默认 `https://www.tiktok.com/explore`
+- `最多处理`: 本次最多分析多少个作者，`0` 表示不限
+- `空转停止轮数`: 连续多少轮没有新增后自动停止
+- `搜索滚动等待 ms`: 搜索页每次滚动后的等待时间
+- `主页滚动等待 ms`: 主页每次滚动后的等待时间
+- `采集主页时激活标签`: 是否打开主页时切到前台
+- `排除最近小时`: 排除最近发布的视频，避免播放量未稳定
+- `启用受众筛选`: 开启后由本地 Node 服务调用 TikWM 评论接口分析
+- `要求主受众国家`: 启用受众筛选时使用
+- `受众最小样本`: 评论国家样本数低于该值时不通过
+- `主受众最低占比 %`: 主受众国家占比低于该值时不通过
+- `受众采样视频数`: 从主页视频里取多少个视频做评论采样
+- `每视频评论数`: 每个视频最多取多少条评论
+- `等级规则`: 每个等级的标识、名称、稳定播放比例、粉丝门槛、稳定播放门槛、最低播放门槛、最近视频数
 
-```bash
-npm start
-```
+配置保存位置：
 
-说明：无限模式现在建议直接在配置文件里改 `search.infinite = true`
+- 输入框失焦、复选框变化后会自动保存到 Chrome 的 `chrome.storage.local`
+- 点击 `开始/继续` 时也会自动保存当前表单配置
+- 点击 `重置` 只清空任务断点和表格，不会清空配置
+- 点击 `恢复默认配置` 才会把配置恢复为内置默认值
 
-停止方式：
+## 本地断点和表格
 
-- 在终端按 `Ctrl + C`
-- 脚本会先保存断点，再安全退出
-- 下次用同一个 `--url` 重新执行即可续跑，断点信息会从实时 Excel 中自动恢复
+- 本地服务会自动把合格结果、发现列表、待处理队列、已处理名单保存到 Excel
+- 插件会保留一份 `chrome.storage.local` 作为服务未启动时的兜底
+- 不需要手动导入断点
+- popup 里会显示 `本地服务`、`断点来源`、`表格路径`、`表格行数`、`上次保存`
+- 点击 `暂停` 只会暂停任务，不会删除本地数据
+- 点击 `重置` 会清空浏览器本地断点，并请求本地服务清空 Excel 断点表
 
-可选启动方式：
+Excel 内包含：
 
-```bash
-node src/index.js --config=./config/default.config.js
-node src/index.js --config=/absolute/path/my.config.js
-node src/index.js --config=./config/default.config.js --url="https://www.tiktok.com/search/video?q=%23tech&t=1777477567556"
-```
+- `头部 KOL`: 合格且最高命中 `头部 KOL` 的结果
+- `普通 KOL`: 合格且最高命中 `普通 KOL` 的结果
+- `小小号`: 合格且最高命中 `小小号` 的结果
+- `尾部 KOC`: 合格且最高命中 `尾部 KOC` 的结果
+- `断点统计`: 搜索链接、保存时间、计数、配置
+- `断点_已发现`: 已发现作者
+- `断点_待处理`: 待处理队列
+- `断点_已处理`: 已处理用户名
+- `断点_日志`: 最近运行日志
 
-## 关键配置项
+结果 sheet 只保存合格账号；失败和不合格账号不会进入结果 sheet，只会通过 `断点_已处理` 防止重复处理。
 
-- `search`:
-  - `url`: 搜索页链接
-  - `infinite`: 是否无限滚动
-  - `parallelAuthors`: 同时并行分析多少个作者主页
-  - `targetCount`: 非无限模式下目标发现作者数
-  - `searchScrolls`: 非无限模式下最大空转轮数
-  - `idleRounds`: 无限模式下连续多少轮无新作者就刷新搜索页
-  - `maxProcessed`: 单次最多分析多少个作者
-- `browser`:
-  - `headless`: 是否无头
-  - `timeoutMs`: 页面超时
-  - `viewport.width` / `viewport.height`: 浏览器窗口尺寸
-  - `userAgent`: 浏览器 UA
-  - `auth.mode`: 登录态策略，支持 `profile` 和 `anonymous`
-  - `auth.userDataDir`: TikTok 专用 profile 目录
-  - `auth.cookieFile`: Cookie 文件路径
-- `scroll`:
-  - `scrollWaitMs`: 每次滚动后的统一等待时间
-  - `apiWaitMs`: 页面打开或滚动后，最多等多久让接口返回或页面就绪
-- `rules`:
-  - `levels`: 等级数组，顺序就是判定优先级和导出顺序
-  - `excludeRecentHours`: 排除最近多少小时内发布的视频
-  - `levels[*].minFollowers`: 粉丝门槛
-  - `levels[*].stablePercent`: 该等级使用的稳定播放比例，例如 `0.9` 表示 90% 稳定播放
-  - `levels[*].stablePlay`: 稳定播放量门槛
-  - `levels[*].minPlay`: 最低播放量门槛
-  - `levels[*].recentVideoCount`: 分析最近多少条视频
-  - 作者主页会按 `levels[*].recentVideoCount` 和 `rules.audience.recentVideoCount` 的最大值自动决定滚动目标；如果视频不足，会继续滚到没有新增内容为止
-  - `audience.enabled`: 是否启用受众国家筛选
-  - `audience.requiredTopCountry`: 主受众国家必须是哪一个
-  - `audience.recentVideoCount`: 受众分析最多使用最近多少条视频作为候选
-  - `audience.maxVideos`: 最多抓多少条视频的评论
-  - `audience.maxPagesPerVideo`: 每条视频最多抓多少页评论
-  - `audience.maxUsersPerVideo`: 每条视频最多计入多少个唯一评论用户
-  - `audience.sampleTarget`: 总共希望抓到多少个受众样本
-- `export`:
-  - `outputDir`: 导出目录
-  - `qualifiedOnly`: 是否主导出只保留合格账号
+## 登录态说明
 
-## 输出文件
+- 插件直接运行在正常 Chrome 中，使用当前浏览器的 TikTok 登录态
+- 不需要 `npm run login`
+- 不需要 Puppeteer
+- 不建议在自动化浏览器里扫码登录 TikTok，容易被拦截
+- 如果 TikTok 弹验证码或登录失效，请先在正常 Chrome 里手动处理
 
-- `output/tiktok_qualified_live.xlsx`
+## 筛选规则
 
-其中：
+默认规则在 [config.js](file:///Users/bytedance/Desktop/BB-%E8%BE%BE%E4%BA%BA%E5%8A%A9%E6%89%8B%E6%AD%A3%E5%BC%8F%E7%89%88%20v2.0%202/tt-auto-screener/src/shared/config.js) 里维护，也可以直接在插件 popup 里改：
 
-- `tiktok_qualified_live.xlsx` 除了实时合格账号外，还会内置断点信息 sheet，便于直接续跑
-
-表格字段包含：
-
-- 用户名 / 昵称 / 主页链接
-- 主受众国家 / 主受众国家占比 / 受众样本数 / 受众筛选达标
-- 来源搜索页 / 来源视频链接 / 搜索页摘录
-- 粉丝量
-- 粉丝归属等级 / 当前分析等级 / 最高满足等级 / 命中等级列表
-- 选取视频数 / 总抓取视频数
-- 稳定播放比例
-- 最低播放量
-- 第二低 / 第三低播放量
-- 稳定播放量
-- 各项门槛及是否达标
-- 接口命中次数
-
-## 当前筛选规则
-
-默认规则现在以配置优先为主，所有等级都在 `rules.levels` 数组中维护：
-
-- 数组顺序决定等级判定顺序和导出 sheet 顺序
-- 取样前会先排除最近 `24` 小时内发布的视频
-- 受众国家按评论用户的 `region` 样本统计，国家数量最多的就是主受众国家
-- 默认只保留主受众国家为 `US` 的账号
-- `top`: 粉丝 `>= 5,000,000`，稳定播放比例 `90%`，稳定播放量 `>= 1,000,000`，最低播放 `>= 500,000`，分析最近 `30` 条视频
-- `mid`: 粉丝 `>= 200,000`，稳定播放比例 `90%`，稳定播放量 `>= 200,000`，最低播放 `>= 150,000`，分析最近 `30` 条视频
-- `tail`: 粉丝 `>= 5,000`，稳定播放比例 `90%`，稳定播放量 `>= 20,000`，最低播放 `>= 10,000`，分析最近 `20` 条视频
+- `top`: 粉丝 `>= 5,000,000`，90% 稳定播放 `>= 1,000,000`，最低播放 `>= 350,000`
+- `mid`: 粉丝 `>= 100,000`，90% 稳定播放 `>= 130,000`，最低播放 `>= 60,000`
+- `little`: 粉丝 `>= 100,000`，50% 稳定播放 `>= 80,000`，最低播放 `>= 20,000`
+- `tail`: 粉丝 `>= 5,000`，90% 稳定播放 `>= 0`，最低播放 `>= 4,000`
 
 计算方式：
 
 - `最低播放量`: 选中视频播放量升序后的第 1 个
-- `稳定播放量`: 按当前等级的 `stablePercent` 计算，例如 `0.9` 时取“90%稳定播放”，`0.8` 时取“80%稳定播放”
+- `稳定播放量`: 按当前等级的 `stablePercent` 计算
+- 默认排除最近 `24` 小时内发布的视频
+- 受众分析在本地服务执行，插件只负责采集主页和视频基础信息
+- 开启受众筛选后，必须配置可用的 TikWM 评论接口，否则账号会因为受众分析失败而不合格
 
-导出分类：
+## 开发校验
 
-- `tiktok_qualified_live.xlsx` 会在运行过程中实时更新合格账号
-- `tiktok_qualified_live.xlsx` 里会额外包含断点 sheet，例如 `断点统计`、`断点_已发现`、`断点_已处理`
-- 整个 `output` 目录默认只保留这一个结果表，不再额外生成时间戳结果文件和 JSON 明细文件
+项目不需要 Puppeteer。可用下面命令做语法检查：
+
+```bash
+npm run check
+```
 
 ## 注意
 
-- TikTok 可能因地区、风控、验证码导致接口返回不稳定。
-- TikWM 公开接口有时会被 Cloudflare 拦截，兜底能力不保证 100% 可用。
-- 如果遇到验证码或页面异常，先使用非 headless 模式排查。
-- `browser.auth.userDataDir` 建议使用单独目录，不要直接复用日常 Chrome 默认目录。
-- `input/tiktok.cookies.json` 已加入 `.gitignore`，不要把真实 TikTok Cookie 提交到仓库。
-- `browser.auth.cookieFile` 只会在 profile 目录不存在时用于首次初始化，不会在每次启动时反复覆盖已有状态。
-- 如果你要纯净访问且不带历史 Cookie，直接把 `browser.auth.mode` 改成 `anonymous`。
-- 断点续跑要求 `--url` 与实时 Excel 内记录的搜索链接保持一致。
+- 插件版依赖 TikTok 页面 DOM，页面结构变化时可能需要更新选择器
+- 插件不会绕过 TikTok 风控、验证码、地区限制
+- 长时间自动滚动仍可能触发限流，请控制采集节奏
+- 如果 `本地服务` 未连接，插件仍会临时使用浏览器本地存储，但无法写入 Excel

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TikTok Auto Screener</title>
+    <link rel="stylesheet" href="./popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <h1>TikTok Auto Screener</h1>
+
+      <div class="actions">
+        <button id="primaryActionBtn" class="primary">开始</button>
+        <button id="resetBtn" class="danger">重置</button>
+      </div>
+
+      <section class="stats">
+        <div><strong id="running">-</strong><span>状态</span></div>
+        <div><strong id="discovered">0</strong><span>发现</span></div>
+        <div><strong id="queued">0</strong><span>队列</span></div>
+        <div><strong id="processed">0</strong><span>已处理</span></div>
+        <div><strong id="qualified">0</strong><span>合格</span></div>
+      </section>
+
+      <section class="checkpoint">
+        <div><span>本地断点</span><strong id="checkpointStatus">无</strong></div>
+        <div><span>表格行数</span><strong id="rowCount">0</strong></div>
+        <div><span>上次保存</span><strong id="lastSavedAt">-</strong></div>
+      </section>
+
+      <section class="server">
+        <div><span>本地服务</span><strong id="serverStatus">未连接</strong></div>
+        <div><span>断点来源</span><strong id="checkpointSource">-</strong></div>
+        <div class="path"><span>表格路径</span><strong id="workbookPath">-</strong></div>
+      </section>
+
+      <section>
+        <h2>日志</h2>
+        <pre id="logs"></pre>
+      </section>
+
+      <label class="field">
+        <span>搜索页链接</span>
+        <textarea id="searchUrl" rows="3" placeholder="https://www.tiktok.com/explore"></textarea>
+      </label>
+
+      <div class="grid">
+        <label class="field">
+          <span>最多处理</span>
+          <input id="maxProcessed" type="number" min="0" value="0">
+        </label>
+        <label class="field">
+          <span>空转停止轮数</span>
+          <input id="idleRounds" type="number" min="1" value="20">
+        </label>
+        <label class="field">
+          <span>并发查询数</span>
+          <input id="concurrentProfiles" type="number" min="1" max="5" value="2">
+        </label>
+      </div>
+
+      <details class="settings" open>
+        <summary>配置</summary>
+
+        <label class="field">
+          <span>本地服务地址</span>
+          <input id="serverBaseUrl" type="text" value="http://127.0.0.1:17321">
+        </label>
+
+        <div class="grid">
+          <label class="field">
+            <span>搜索滚动等待 ms</span>
+            <input id="scrollWaitMs" type="number" min="100" value="1200">
+          </label>
+          <label class="field">
+            <span>主页滚动等待 ms</span>
+            <input id="profileWaitMs" type="number" min="100" value="1500">
+          </label>
+        </div>
+
+        <div class="grid">
+          <label class="field checkbox">
+            <input id="profileTabActive" type="checkbox">
+            <span>采集主页时激活标签</span>
+          </label>
+          <label class="field checkbox">
+            <input id="audienceEnabled" type="checkbox">
+            <span>启用受众筛选</span>
+          </label>
+        </div>
+
+        <div class="grid">
+          <label class="field">
+            <span>排除最近小时</span>
+            <input id="excludeRecentHours" type="number" min="0" value="24">
+          </label>
+          <label class="field">
+            <span>要求主受众国家</span>
+            <input id="requiredTopCountry" type="text" value="US">
+          </label>
+        </div>
+
+        <div class="grid">
+          <label class="field">
+            <span>受众最小样本</span>
+            <input id="minSampleCount" type="number" min="0" value="20">
+          </label>
+          <label class="field">
+            <span>主受众最低占比 %</span>
+            <input id="minTopCountryPercentage" type="number" min="0" max="100" value="50">
+          </label>
+        </div>
+
+        <div class="grid">
+          <label class="field">
+            <span>受众采样视频数</span>
+            <input id="sampleVideoCount" type="number" min="1" value="3">
+          </label>
+          <label class="field">
+            <span>每视频评论数</span>
+            <input id="commentsPerVideo" type="number" min="1" value="50">
+          </label>
+        </div>
+
+        <h2>等级规则</h2>
+        <div id="levels"></div>
+
+        <div class="actions">
+          <button id="resetConfigBtn" class="danger">恢复默认配置</button>
+        </div>
+      </details>
+    </main>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>

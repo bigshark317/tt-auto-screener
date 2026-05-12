@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "TikTok Auto Screener",
+  "version": "3.0.1",
+  "description": "在正常 Chrome 登录态中滚动 TikTok 页面、采集达人主页信息并写入本地 Excel。",
+  "permissions": ["storage", "unlimitedStorage", "tabs", "scripting"],
+  "host_permissions": ["https://www.tiktok.com/*", "http://127.0.0.1:17321/*"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.tiktok.com/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "TikTok Auto Screener",
+    "default_popup": "src/popup/popup.html"
+  }
+}
