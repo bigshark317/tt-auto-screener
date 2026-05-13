@@ -140,6 +140,7 @@ function extractAuthorsFromPage() {
     if (!parsed?.username || seen.has(parsed.username)) continue;
     const card = findVideoCard(link);
     const videoLink = card?.querySelector?.('a[href*="/video/"]')?.href || '';
+    if (!videoLink) continue;
     const videoAuthor = parseAuthorFromHref(videoLink)?.username;
     if (videoAuthor && videoAuthor !== parsed.username) continue;
     const sourceText = (card?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 300);
@@ -277,18 +278,64 @@ function extractVideosFromDom() {
   return videos;
 }
 
-async function waitForInitialVideos(timeoutMs = 15000) {
+function hasProfileErrorState() {
+  const text = getPageText(30000);
+  return /出错了|很抱歉|请稍后重试|Something went wrong|Try again|Please try again/i.test(text);
+}
+
+function hasPrivateAccountState() {
+  const text = getPageText(30000);
+  return /这是私密账号|这是私密帐号|私密账号|私密帐号|Private account|This account is private/i.test(text);
+}
+
+function clickElement(element) {
+  element.scrollIntoView?.({ block: 'center', inline: 'center' });
+  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    element.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+    }));
+  }
+}
+
+function clickInlineRefreshButton() {
+  const buttons = Array.from(document.querySelectorAll('button, [role="button"], div, span'));
+  const refreshButton = buttons.find((button) => {
+    const text = (button.textContent || '').replace(/\s+/g, '');
+    return /^(刷新|重试|Refresh|Tryagain)$/i.test(text);
+  });
+  if (!refreshButton) return false;
+  clickElement(refreshButton);
+  return true;
+}
+
+async function waitForInitialVideos(timeoutMs = 15000, maxInlineRefreshAttempts = 2) {
   const startedAt = Date.now();
   let videos = extractVideosFromDom();
+  let inlineRefreshAttempts = 0;
+  let errorDetected = hasProfileErrorState();
+  let privateDetected = hasPrivateAccountState();
 
-  while (videos.length === 0 && Date.now() - startedAt < timeoutMs) {
+  while (videos.length === 0 && !privateDetected && Date.now() - startedAt < timeoutMs) {
+    if (hasProfileErrorState()) {
+      errorDetected = true;
+      if (inlineRefreshAttempts < maxInlineRefreshAttempts && clickInlineRefreshButton()) {
+        inlineRefreshAttempts += 1;
+        await sleep(2000);
+      }
+    }
     await sleep(500);
+    privateDetected = hasPrivateAccountState();
     videos = extractVideosFromDom();
   }
 
   return {
     videos,
     timedOut: videos.length === 0,
+    errorDetected,
+    privateDetected,
+    inlineRefreshAttempts,
   };
 }
 
@@ -296,11 +343,14 @@ async function collectProfile(options = {}) {
   const username = normalizeUsername(options.username || location.pathname.match(/^\/@([^/?#]+)/)?.[1] || '');
   const targetVideoCount = Math.max(1, Number(options.targetVideoCount) || 30);
   const waitMs = Number(options.waitMs) || 1500;
-  const initial = await waitForInitialVideos(Number(options.initialVideoTimeoutMs) || 15000);
+  const initial = await waitForInitialVideos(
+    Number(options.initialVideoTimeoutMs) || 15000,
+    Number(options.maxInlineRefreshAttempts) || 2,
+  );
   let videos = initial.videos;
   let unchangedRounds = 0;
 
-  while (videos.length < targetVideoCount && unchangedRounds < 3) {
+  while (!initial.privateDetected && videos.length < targetVideoCount && unchangedRounds < 3) {
     const beforeCount = videos.length;
     await scrollPage(waitMs);
     videos = extractVideosFromDom();
@@ -320,6 +370,9 @@ async function collectProfile(options = {}) {
     contactEmail: emails[0] || '',
     loadState: {
       initialVideoTimedOut: initial.timedOut,
+      profileErrorDetected: initial.errorDetected,
+      privateAccountDetected: initial.privateDetected,
+      inlineRefreshAttempts: initial.inlineRefreshAttempts,
     },
     audience: {
       topCountry: '',

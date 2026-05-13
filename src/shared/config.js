@@ -6,7 +6,7 @@ export const DEFAULT_CONFIG = {
     url: 'https://www.tiktok.com/explore',
     idleRounds: 20,
     maxProcessed: 0,
-    concurrentProfiles: 2,
+    concurrentProfiles: 1,
     profileTabActive: false,
   },
   scroll: {

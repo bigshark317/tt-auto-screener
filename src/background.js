@@ -365,7 +365,7 @@ function enqueueAuthors(authors, sourceSearchUrl) {
   let newCount = 0;
 
   for (const author of authors || []) {
-    if (!author?.username) continue;
+    if (!author?.username || !author.sourceVideoUrl) continue;
     const next = {
       ...discoveredMap.get(author.username),
       ...author,
@@ -387,6 +387,16 @@ function enqueueAuthors(authors, sourceSearchUrl) {
   return newCount;
 }
 
+function removeAuthorsWithoutSourceVideo() {
+  const beforeQueue = state.queue.length;
+  const beforeDiscovered = state.discovered.length;
+  state.queue = state.queue.filter((author) => author?.sourceVideoUrl);
+  state.discovered = state.discovered.filter((author) => author?.sourceVideoUrl);
+  const removed = (beforeQueue - state.queue.length) + (beforeDiscovered - state.discovered.length);
+  if (removed > 0) log(`已清理无来源视频的候选账号 ${removed} 条`);
+  updateStats();
+}
+
 async function scanSearchPage(options = {}) {
   const shouldScroll = options.scroll !== false;
   const tabId = await ensureSearchTab(state.searchUrl);
@@ -406,7 +416,8 @@ async function scanSearchPage(options = {}) {
 }
 
 function getConcurrentProfileLimit(maxProcessed) {
-  const configured = Number(state.config.search.concurrentProfiles) || 2;
+  const configured = Number(state.config.search.concurrentProfiles)
+    || DEFAULT_CONFIG.search.concurrentProfiles;
   const bounded = Math.max(1, Math.min(5, Math.floor(configured)));
   if (maxProcessed > 0) return Math.min(bounded, Math.max(0, maxProcessed - state.processed.length));
   return bounded;
@@ -438,6 +449,7 @@ async function collectProfileFromTab(tabId, author, profileTargetVideoCount) {
       targetVideoCount: profileTargetVideoCount,
       waitMs: state.config.scroll.profileWaitMs,
       initialVideoTimeoutMs: 15000,
+      maxInlineRefreshAttempts: 3,
     },
   });
   if (!response?.ok) throw new Error(response?.error || '主页采集失败');
@@ -461,16 +473,22 @@ async function loadAndCollectActiveProfile(tabId, author) {
 
     const profileTargetVideoCount = getProfileTargetVideoCount(state.config);
     let profile = await collectProfileFromTab(tabId, author, profileTargetVideoCount);
-    if ((profile.videos || []).length === 0) {
-      log(`@${author.username} 主页视频未加载，刷新后重试一次`);
+    if (profile.loadState?.privateAccountDetected) return profile;
+    for (let retry = 1; retry <= 3 && (profile.videos || []).length === 0; retry += 1) {
+      const inlineRefreshes = Number(profile.loadState?.inlineRefreshAttempts) || 0;
+      const reason = profile.loadState?.profileErrorDetected
+        ? `检测到页内错误${inlineRefreshes ? `，已点刷新 ${inlineRefreshes} 次` : ''}`
+        : '主页视频未加载';
+      log(`@${author.username} ${reason}，浏览器刷新重试 ${retry}/3`);
       await tabsReload(tabId);
       await waitForTabCompleteWithRefresh(tabId, {
         refreshAfterMs: 3000,
-        refreshMessage: `@${author.username} 主页重试加载超过 3 秒，自动刷新一次`,
+        refreshMessage: `@${author.username} 主页重试 ${retry}/3 加载超过 3 秒，自动刷新一次`,
       });
       await tabsUpdate(tabId, { active: true });
       await sleep(800);
       profile = await collectProfileFromTab(tabId, author, profileTargetVideoCount);
+      if (profile.loadState?.privateAccountDetected) return profile;
     }
     if ((profile.videos || []).length === 0) throw new Error('主页视频仍未加载');
     return profile;
@@ -484,6 +502,12 @@ async function collectAuthor(author) {
   });
   try {
     const profile = await loadAndCollectActiveProfile(tab.id, author);
+    if (profile.loadState?.privateAccountDetected) {
+      state.processed.push(author.username);
+      updateStats();
+      log(`跳过 @${author.username} | 私密账号`);
+      return;
+    }
     const { result, row } = await analyzeProfileWithServer(profile);
     if (row.是否合格 === '合格') state.rows.push(row);
     state.processed.push(author.username);
@@ -557,6 +581,7 @@ async function start(payload = {}) {
   if (hasCheckpoint()) {
     state.searchUrl = state.searchUrl || requestedUrl;
     state.config.search.url = state.searchUrl;
+    removeAuthorsWithoutSourceVideo();
     log(`检测到本地断点，继续上次任务 | 搜索页 ${state.searchUrl} | 队列 ${state.queue.length} | 已处理 ${state.processed.length} | 表格 ${state.rows.length}`);
   } else {
     state.searchUrl = requestedUrl;

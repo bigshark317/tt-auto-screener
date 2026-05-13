@@ -94,7 +94,7 @@ function renderLevels(levels) {
 
 function renderConfigForm(config) {
   elements.searchUrl.value = config.search.url || DEFAULT_CONFIG.search.url;
-  elements.concurrentProfiles.value = config.search.concurrentProfiles || 2;
+  elements.concurrentProfiles.value = config.search.concurrentProfiles || DEFAULT_CONFIG.search.concurrentProfiles;
   elements.profileTabActive.checked = Boolean(config.search.profileTabActive);
   elements.serverBaseUrl.value = config.server.baseUrl || DEFAULT_CONFIG.server.baseUrl;
   elements.scrollWaitMs.value = config.scroll.scrollWaitMs || 1200;
@@ -177,7 +177,10 @@ function buildConfigFromForm() {
       url: elements.searchUrl.value.trim() || DEFAULT_CONFIG.search.url,
       maxProcessed: DEFAULT_CONFIG.search.maxProcessed,
       idleRounds: DEFAULT_CONFIG.search.idleRounds,
-      concurrentProfiles: Math.max(1, Math.min(5, numberValue(elements.concurrentProfiles, 2))),
+      concurrentProfiles: Math.max(1, Math.min(5, numberValue(
+        elements.concurrentProfiles,
+        DEFAULT_CONFIG.search.concurrentProfiles,
+      ))),
       profileTabActive: elements.profileTabActive.checked,
     },
     scroll: {
