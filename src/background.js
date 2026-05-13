@@ -101,6 +101,36 @@ function hasCheckpoint() {
     || state.rows.length > 0;
 }
 
+function isProfileUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return /(^|\/)@[^/]+\/?$/.test(parsed.pathname);
+  } catch (error) {
+    return false;
+  }
+}
+
+function isSearchSourceUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.includes('tiktok.com')
+      && !isProfileUrl(url)
+      && (
+        parsed.pathname === '/'
+        || parsed.pathname.startsWith('/explore')
+        || parsed.pathname.startsWith('/search')
+        || parsed.pathname.startsWith('/tag')
+        || parsed.pathname.startsWith('/discover')
+      );
+  } catch (error) {
+    return false;
+  }
+}
+
+function normalizeSearchUrl(url) {
+  return isSearchSourceUrl(url) ? url : DEFAULT_CONFIG.search.url;
+}
+
 function getServerBaseUrl() {
   return state.config?.server?.baseUrl || DEFAULT_CONFIG.server.baseUrl;
 }
@@ -359,6 +389,10 @@ async function ensureSearchTab(searchUrl) {
 }
 
 function enqueueAuthors(authors, sourceSearchUrl) {
+  if (!isSearchSourceUrl(sourceSearchUrl)) {
+    log(`忽略非列表页扫描结果: ${sourceSearchUrl || '-'}`);
+    return 0;
+  }
   const discoveredMap = new Map(state.discovered.map((item) => [item.username, item]));
   const queueMap = new Map(state.queue.map((item) => [item.username, item]));
   const processed = new Set(state.processed);
@@ -387,13 +421,14 @@ function enqueueAuthors(authors, sourceSearchUrl) {
   return newCount;
 }
 
-function removeAuthorsWithoutSourceVideo() {
+function removeInvalidDiscoveredAuthors() {
   const beforeQueue = state.queue.length;
   const beforeDiscovered = state.discovered.length;
-  state.queue = state.queue.filter((author) => author?.sourceVideoUrl);
-  state.discovered = state.discovered.filter((author) => author?.sourceVideoUrl);
+  const isValid = (author) => author?.sourceVideoUrl && isSearchSourceUrl(author.sourceSearchUrl || state.searchUrl);
+  state.queue = state.queue.filter(isValid);
+  state.discovered = state.discovered.filter(isValid);
   const removed = (beforeQueue - state.queue.length) + (beforeDiscovered - state.discovered.length);
-  if (removed > 0) log(`已清理无来源视频的候选账号 ${removed} 条`);
+  if (removed > 0) log(`已清理无效候选账号 ${removed} 条`);
   updateStats();
 }
 
@@ -579,12 +614,12 @@ async function start(payload = {}) {
     return;
   }
   if (hasCheckpoint()) {
-    state.searchUrl = state.searchUrl || requestedUrl;
+    state.searchUrl = normalizeSearchUrl(state.searchUrl || requestedUrl);
     state.config.search.url = state.searchUrl;
-    removeAuthorsWithoutSourceVideo();
+    removeInvalidDiscoveredAuthors();
     log(`检测到本地断点，继续上次任务 | 搜索页 ${state.searchUrl} | 队列 ${state.queue.length} | 已处理 ${state.processed.length} | 表格 ${state.rows.length}`);
   } else {
-    state.searchUrl = requestedUrl;
+    state.searchUrl = normalizeSearchUrl(requestedUrl);
     log(`创建新任务 | 搜索页 ${state.searchUrl}`);
   }
   state.running = true;

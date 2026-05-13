@@ -289,7 +289,7 @@ async function analyzeProfile(profile, rules, options = {}) {
   const activeMetrics = bestQualified || tierMetrics.find((item) => item.tier === followerTier.tier) || tierMetrics[0] || null;
   const audienceCheck = await evaluateAudience(profile, rules, log);
   const isQualified = Boolean(bestQualified && audienceCheck.passed);
-  log(`分析完成 | @${profile.username} | ${isQualified ? '合格' : '不合格'} | 等级 ${bestQualified?.tierLabel || '-'} | 原因 ${isQualified ? `命中 ${bestQualified.tierLabel}` : audienceCheck.passed ? summarizeFailure(activeMetrics, tierMetrics) : audienceCheck.failureReason}`);
+  log(`分析完成 | @${profile.username} | ${isQualified ? '合格' : '不合格'} | 等级 ${bestQualified?.tierLabel || activeMetrics?.tierLabel || '-'} | 原因 ${isQualified ? `命中 ${bestQualified.tierLabel}` : audienceCheck.passed ? summarizeFailure(activeMetrics, tierMetrics) : audienceCheck.failureReason}`);
 
   return {
     result: {

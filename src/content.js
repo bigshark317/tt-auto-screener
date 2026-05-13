@@ -44,7 +44,7 @@ function extractPlayCountFromCard(card) {
     '[class*="video-count"]',
   ].join(','));
   const viewText = viewsEl?.getAttribute?.('aria-label') || viewsEl?.textContent || '';
-  if (viewText && (isCompactCountText(viewText) || isPlainCountText(viewText))) return parseCount(viewText);
+  if (viewText) return parseCount(viewText);
 
   const candidates = Array.from(card?.querySelectorAll?.('span, strong, div, p') || [])
     .map((el) => (el.getAttribute?.('aria-label') || el.textContent || '').trim())
