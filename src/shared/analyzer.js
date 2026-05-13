@@ -5,6 +5,13 @@ function formatNumber(value) {
   return String(num);
 }
 
+function isCountAtLeast(actual, required) {
+  const actualNumber = Number(actual) || 0;
+  const requiredNumber = Number(required) || 0;
+  if (actualNumber >= requiredNumber) return true;
+  return requiredNumber >= 1000 && formatNumber(actualNumber) === formatNumber(requiredNumber);
+}
+
 function getLevels(rules) {
   return Array.isArray(rules?.levels) ? rules.levels.filter(Boolean) : [];
 }
@@ -62,13 +69,13 @@ function buildTierMetrics(level, followerCount, allVideos, rules) {
       label: '稳定播放量',
       required: Number(level.stablePlay) || 0,
       actual: stablePlay,
-      ok: stablePlay >= (Number(level.stablePlay) || 0),
+      ok: isCountAtLeast(stablePlay, Number(level.stablePlay) || 0),
     },
     {
       label: '最低播放量',
       required: Number(level.minPlay) || 0,
       actual: minPlay,
-      ok: minPlay >= (Number(level.minPlay) || 0),
+      ok: isCountAtLeast(minPlay, Number(level.minPlay) || 0),
     },
   ];
 
@@ -87,7 +94,10 @@ function buildTierMetrics(level, followerCount, allVideos, rules) {
 }
 
 function evaluateAudience(rules) {
-  const audienceRules = rules?.audience || {};
+  const audienceRules = {
+    ...(rules?.audience || {}),
+    enabled: true,
+  };
   if (!audienceRules.enabled) {
     return {
       passed: true,

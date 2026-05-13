@@ -1,5 +1,5 @@
 const DEFAULT_AUDIENCE = {
-  enabled: false,
+  enabled: true,
   requiredTopCountry: 'US',
   minSampleCount: 20,
   minTopCountryPercentage: 50,
@@ -14,6 +14,13 @@ function formatNumber(value) {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
   return String(num);
+}
+
+function isCountAtLeast(actual, required) {
+  const actualNumber = Number(actual) || 0;
+  const requiredNumber = Number(required) || 0;
+  if (actualNumber >= requiredNumber) return true;
+  return requiredNumber >= 1000 && formatNumber(actualNumber) === formatNumber(requiredNumber);
 }
 
 function getLevels(rules) {
@@ -73,13 +80,13 @@ function buildTierMetrics(level, followerCount, allVideos, rules) {
       label: '稳定播放量',
       required: Number(level.stablePlay) || 0,
       actual: stablePlay,
-      ok: stablePlay >= (Number(level.stablePlay) || 0),
+      ok: isCountAtLeast(stablePlay, Number(level.stablePlay) || 0),
     },
     {
       label: '最低播放量',
       required: Number(level.minPlay) || 0,
       actual: minPlay,
-      ok: minPlay >= (Number(level.minPlay) || 0),
+      ok: isCountAtLeast(minPlay, Number(level.minPlay) || 0),
     },
   ];
 
@@ -104,6 +111,17 @@ function summarizeFailure(bestMetrics, levels) {
   return failedChecks
     .map((check) => `${check.label} ${formatNumber(check.actual)}/${formatNumber(check.required)}`)
     .join('，');
+}
+
+function formatCheck(check) {
+  return `${check.ok ? '✓' : '×'}${check.label} ${formatNumber(check.actual)}/${formatNumber(check.required)}`;
+}
+
+function logTierDetails(username, tierMetrics, log = noop) {
+  for (const metrics of tierMetrics) {
+    const details = metrics.checks.map(formatCheck).join(' | ');
+    log(`等级明细 | @${username} | ${metrics.tierLabel} | ${metrics.passed ? '通过' : '未通过'} | 选取视频 ${metrics.selectedVideos.length} | ${details}`);
+  }
 }
 
 function normalizeCountry(value) {
@@ -185,6 +203,7 @@ async function evaluateAudience(profile, rules, log = noop) {
   const audienceRules = {
     ...DEFAULT_AUDIENCE,
     ...(rules?.audience || {}),
+    enabled: true,
   };
   if (!audienceRules.enabled) {
     log(`受众分析跳过 | @${profile.username} | 未启用受众筛选`);
@@ -198,7 +217,10 @@ async function evaluateAudience(profile, rules, log = noop) {
   }
 
   const requiredCountry = normalizeCountry(audienceRules.requiredTopCountry || 'US');
-  const videos = Array.isArray(profile.videos) ? profile.videos : [];
+  const videos = sortByRecency(excludeRecentVideos(
+    Array.isArray(profile.videos) ? profile.videos : [],
+    rules,
+  ));
   const selectedVideos = videos
     .map((video) => video?.id)
     .filter(Boolean)
@@ -290,6 +312,7 @@ async function analyzeProfile(profile, rules, options = {}) {
   const audienceCheck = await evaluateAudience(profile, rules, log);
   const isQualified = Boolean(bestQualified && audienceCheck.passed);
   log(`分析完成 | @${profile.username} | ${isQualified ? '合格' : '不合格'} | 等级 ${bestQualified?.tierLabel || activeMetrics?.tierLabel || '-'} | 原因 ${isQualified ? `命中 ${bestQualified.tierLabel}` : audienceCheck.passed ? summarizeFailure(activeMetrics, tierMetrics) : audienceCheck.failureReason}`);
+  if (!isQualified) logTierDetails(profile.username, tierMetrics, log);
 
   return {
     result: {

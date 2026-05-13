@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG, mergeConfig } from '../shared/config.js';
+import { CONFIG_VERSION, DEFAULT_CONFIG, mergeConfig } from '../shared/config.js';
 
 const SETTINGS_KEY = 'tt_auto_screener_settings_v3';
 let currentConfig = DEFAULT_CONFIG;
@@ -50,15 +50,37 @@ function cloneConfig(config) {
   return JSON.parse(JSON.stringify(config));
 }
 
-async function loadStoredConfig(fallbackConfig = DEFAULT_CONFIG) {
+function normalizeStoredSettings(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (value.version === CONFIG_VERSION && value.config && typeof value.config === 'object') {
+    return value.config;
+  }
+  return null;
+}
+
+async function loadStoredConfig() {
   const stored = await chrome.storage.local.get(SETTINGS_KEY);
-  currentConfig = mergeConfig(DEFAULT_CONFIG, stored[SETTINGS_KEY] || fallbackConfig || {});
+  const normalized = normalizeStoredSettings(stored[SETTINGS_KEY]);
+  currentConfig = mergeConfig(DEFAULT_CONFIG, normalized || {});
+  if (!normalized) {
+    await chrome.storage.local.set({
+      [SETTINGS_KEY]: {
+        version: CONFIG_VERSION,
+        config: currentConfig,
+      },
+    });
+  }
   return currentConfig;
 }
 
 async function saveStoredConfig(config) {
   currentConfig = mergeConfig(DEFAULT_CONFIG, config);
-  await chrome.storage.local.set({ [SETTINGS_KEY]: currentConfig });
+  await chrome.storage.local.set({
+    [SETTINGS_KEY]: {
+      version: CONFIG_VERSION,
+      config: currentConfig,
+    },
+  });
 }
 
 function numberValue(element, fallback = 0) {
@@ -100,7 +122,7 @@ function renderConfigForm(config) {
   elements.scrollWaitMs.value = config.scroll.scrollWaitMs || 1200;
   elements.profileWaitMs.value = config.scroll.profileWaitMs || 1500;
   elements.excludeRecentHours.value = config.rules.excludeRecentHours || 0;
-  elements.audienceEnabled.checked = Boolean(config.rules.audience?.enabled);
+  elements.audienceEnabled.checked = true;
   elements.requiredTopCountry.value = config.rules.audience?.requiredTopCountry || '';
   elements.minSampleCount.value = config.rules.audience?.minSampleCount ?? 20;
   elements.minTopCountryPercentage.value = config.rules.audience?.minTopCountryPercentage ?? 50;
@@ -163,7 +185,7 @@ function updateView(state) {
 async function refresh() {
   const response = await send('GET_STATE');
   if (response?.ok) {
-    if (!configRendered) await loadStoredConfig(response.state?.config);
+    if (!configRendered) await loadStoredConfig();
     updateView(response.state);
   }
 }
@@ -190,7 +212,7 @@ function buildConfigFromForm() {
     rules: {
       excludeRecentHours: Math.max(0, numberValue(elements.excludeRecentHours, 24)),
       audience: {
-        enabled: elements.audienceEnabled.checked,
+        enabled: true,
         requiredTopCountry: elements.requiredTopCountry.value.trim().toUpperCase(),
         minSampleCount: Math.max(0, numberValue(elements.minSampleCount, 20)),
         minTopCountryPercentage: Math.max(0, numberValue(elements.minTopCountryPercentage, 50)),

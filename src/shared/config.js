@@ -1,3 +1,5 @@
+export const CONFIG_VERSION = 3;
+
 export const DEFAULT_CONFIG = {
   server: {
     baseUrl: 'http://127.0.0.1:17321',
@@ -16,7 +18,7 @@ export const DEFAULT_CONFIG = {
   rules: {
     excludeRecentHours: 24,
     audience: {
-      enabled: false,
+      enabled: true,
       requiredTopCountry: 'US',
       minSampleCount: 20,
       minTopCountryPercentage: 50,

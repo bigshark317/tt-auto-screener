@@ -135,6 +135,16 @@ function getServerBaseUrl() {
   return state.config?.server?.baseUrl || DEFAULT_CONFIG.server.baseUrl;
 }
 
+function forceAudienceEnabled(config) {
+  return mergeConfig(config, {
+    rules: {
+      audience: {
+        enabled: true,
+      },
+    },
+  });
+}
+
 async function requestServer(path, options = {}) {
   const baseUrl = getServerBaseUrl().replace(/\/+$/, '');
   const response = await fetch(`${baseUrl}${path}`, {
@@ -213,7 +223,7 @@ async function analyzeProfileWithServer(profile) {
       method: 'POST',
       body: JSON.stringify({
         profile,
-        rules: state.config.rules,
+        rules: forceAudienceEnabled(state.config).rules,
       }),
     });
     setServerStatus({ connected: true, workbookPath: data.workbookPath || state.workbookPath });
@@ -547,7 +557,10 @@ async function collectAuthor(author) {
     if (row.是否合格 === '合格') state.rows.push(row);
     state.processed.push(author.username);
     updateStats();
-    log(`完成 @${author.username} | ${row.是否合格} | 粉丝 ${row.粉丝量展示} | 视频 ${row.总抓取视频数} | ${result.decisionReason}`);
+    const apiHitText = profile.apiHits
+      ? ` | 接口 用户 ${profile.apiHits.userDetail || 0} 视频 ${profile.apiHits.itemList || 0}`
+      : '';
+    log(`完成 @${author.username} | ${row.是否合格} | 粉丝 ${row.粉丝量展示} | 视频 ${row.总抓取视频数}${apiHitText} | ${result.decisionReason}`);
   } catch (error) {
     if (isLocalServiceDisconnectedError(error)) {
       state.queue.unshift(author);
@@ -603,7 +616,7 @@ async function runLoop(token) {
 
 async function start(payload = {}) {
   await restore();
-  const nextConfig = mergeConfig(DEFAULT_CONFIG, payload.config || {});
+  const nextConfig = forceAudienceEnabled(mergeConfig(DEFAULT_CONFIG, payload.config || {}));
   const requestedUrl = payload.searchUrl || nextConfig.search.url || DEFAULT_CONFIG.search.url;
   state.config = nextConfig;
   state.server.baseUrl = getServerBaseUrl();

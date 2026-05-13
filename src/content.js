@@ -1,4 +1,19 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const apiVideoCache = new Map();
+const apiAuthorCache = new Map();
+const apiProfileVideos = new Map();
+const apiProfileAuthors = new Map();
+
+function injectApiInterceptor() {
+  if (document.documentElement.dataset.ttAutoScreenerInjected) return;
+  document.documentElement.dataset.ttAutoScreenerInjected = '1';
+  const script = document.createElement('script');
+  script.src = chrome.runtime.getURL('src/page-interceptor.js');
+  script.onload = () => script.remove();
+  (document.head || document.documentElement).appendChild(script);
+}
+
+injectApiInterceptor();
 
 function parseCount(text) {
   const cleaned = String(text || '')
@@ -18,44 +33,130 @@ function parseCount(text) {
   return Math.round(value);
 }
 
-function isCompactCountText(text) {
-  const cleaned = String(text || '')
-    .replace(/[\s\u00a0]+/g, '')
-    .replace(/,/g, '')
-    .trim();
-  return /^[\d.]+([KkMmBb]|万|億|亿|千)$/.test(cleaned);
-}
-
-function isPlainCountText(text) {
-  const cleaned = String(text || '')
-    .replace(/[\s\u00a0]+/g, '')
-    .replace(/,/g, '')
-    .trim();
-  return /^\d+$/.test(cleaned);
-}
-
-function extractPlayCountFromCard(card) {
-  const viewsEl = card?.querySelector?.([
-    '[data-e2e="video-views"]',
-    'strong[data-e2e="video-views"]',
-    '[aria-label*="view" i]',
-    '[aria-label*="播放"]',
-    '[class*="VideoCount"]',
-    '[class*="video-count"]',
-  ].join(','));
-  const viewText = viewsEl?.getAttribute?.('aria-label') || viewsEl?.textContent || '';
-  if (viewText) return parseCount(viewText);
-
-  const candidates = Array.from(card?.querySelectorAll?.('span, strong, div, p') || [])
-    .map((el) => (el.getAttribute?.('aria-label') || el.textContent || '').trim())
-    .filter(isCompactCountText);
-  if (!candidates.length) return 0;
-  return Math.max(...candidates.map(parseCount));
-}
-
 function normalizeUsername(input) {
   return String(input || '').replace(/^@/, '').replace(/\/+$/, '').trim();
 }
+
+function numberFrom(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') return parseCount(value);
+  return 0;
+}
+
+function getNested(object, keys) {
+  for (const key of keys) {
+    if (object?.[key] !== undefined && object?.[key] !== null) return object[key];
+  }
+  return undefined;
+}
+
+function isDiscoveryApiUrl(url) {
+  const value = String(url || '');
+  return /\/api\/explore\/item_list\/?/i.test(value);
+}
+
+function isProfileApiUrl(url) {
+  const value = String(url || '');
+  return /\/api\/post\/item_list\/?/i.test(value);
+}
+
+function normalizeApiVideo(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const item = raw.item || raw.aweme_info || raw.awemeInfo || (raw.id || raw.author || raw.stats ? raw : raw.video) || raw;
+  const author = item.author || item.authorInfo || item.author_info || item.user || {};
+  const username = normalizeUsername(getNested(author, ['uniqueId', 'unique_id', 'nickname']) || '');
+  const id = String(getNested(item, ['id', 'aweme_id', 'item_id', 'videoId']) || '');
+  if (!id || !username) return null;
+
+  const stats = item.stats || item.statistics || item.statsV2 || {};
+  const statsV2 = item.statsV2 || {};
+  const authorStats = item.authorStats || item.author_stats || item.authorStatsV2 || {};
+  const authorStatsV2 = item.authorStatsV2 || {};
+  const playCount = numberFrom(getNested(stats, ['playCount', 'play_count', 'playCountStr', 'play_count_str'])
+    ?? getNested(statsV2, ['playCount', 'play_count', 'playCountStr', 'play_count_str'])
+    ?? getNested(item, ['playCount', 'play_count']));
+  const createTime = Number(getNested(item, ['createTime', 'create_time'])) || extractTimestampFromVideoId(id);
+
+  return {
+    id,
+    username,
+    url: `https://www.tiktok.com/@${username}/video/${id}`,
+    desc: item.desc || item.description || '',
+    createTime,
+    playCount,
+    author: {
+      username,
+      nickname: author.nickname || author.nickName || '',
+      signature: author.signature || author.bio || '',
+      followerCount: numberFrom(getNested(authorStatsV2, ['followerCount', 'follower_count'])
+        ?? getNested(authorStats, ['followerCount', 'follower_count'])
+        ?? getNested(author, ['followerCount', 'follower_count'])),
+      videoCount: numberFrom(getNested(authorStatsV2, ['videoCount', 'video_count'])
+        ?? getNested(authorStats, ['videoCount', 'video_count'])
+        ?? getNested(author, ['videoCount', 'video_count'])),
+    },
+  };
+}
+
+function collectApiItems(value, output = []) {
+  if (!value || output.length > 500) return output;
+  if (Array.isArray(value)) {
+    for (const item of value) collectApiItems(item, output);
+    return output;
+  }
+  if (typeof value !== 'object') return output;
+
+  const normalized = normalizeApiVideo(value);
+  if (normalized) output.push(normalized);
+
+  for (const key of ['itemList', 'item_list', 'items', 'aweme_list', 'data', 'list']) {
+    const nested = value[key];
+    if (nested && nested !== value) collectApiItems(nested, output);
+  }
+  return output;
+}
+
+function cacheApiPayload(payload, sourceUrl = '') {
+  const items = collectApiItems(payload);
+  const canDiscoverAuthor = isDiscoveryApiUrl(sourceUrl);
+  const canCollectProfile = isProfileApiUrl(sourceUrl);
+  for (const item of items) {
+    apiVideoCache.set(item.id, item);
+    if (canDiscoverAuthor) {
+      apiAuthorCache.set(item.username, {
+        username: item.username,
+        profileUrl: `https://www.tiktok.com/@${item.username}`,
+        sourceVideoUrl: item.url,
+        sourceText: item.desc || '',
+      });
+    }
+    if (canCollectProfile) {
+      apiProfileAuthors.set(item.username, {
+        uniqueId: item.author.username,
+        nickname: item.author.nickname,
+        signature: item.author.signature,
+        followerCount: item.author.followerCount,
+        videoCount: item.author.videoCount,
+      });
+
+      const videos = apiProfileVideos.get(item.username) || new Map();
+      videos.set(item.id, {
+        id: item.id,
+        url: item.url,
+        desc: item.desc,
+        createTime: item.createTime,
+        playCount: item.playCount,
+      });
+      apiProfileVideos.set(item.username, videos);
+    }
+  }
+}
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
+  if (event.data?.source !== 'TT_AUTO_SCREENER_PAGE' || event.data?.type !== 'API_RESPONSE') return;
+  cacheApiPayload(event.data.payload, event.data.url);
+});
 
 function extractTimestampFromVideoId(videoId) {
   try {
@@ -75,36 +176,6 @@ function getPageText(limit = 8000) {
   return (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, limit);
 }
 
-function parseAuthorFromHref(href) {
-  const match = String(href || '').match(/(?:tiktok\.com)?\/@([^/?#]+)(?:\/video\/(\d+))?/i);
-  if (!match) return null;
-  return {
-    username: normalizeUsername(decodeURIComponent(match[1])),
-    videoId: match[2] || '',
-  };
-}
-
-function findVideoCard(element) {
-  const selectors = [
-    '[data-e2e*="search"]',
-    '[data-e2e*="recommend"]',
-    '[data-e2e*="explore"]',
-    '[class*="DivItemContainer"]',
-    '[class*="video-feed-item"]',
-    '[class*="SearchItem"]',
-    'article',
-  ];
-  const matched = element.closest(selectors.join(','));
-  if (matched) return matched;
-
-  let current = element.parentElement;
-  for (let depth = 0; current && depth < 6; depth += 1) {
-    if (current.querySelector?.('a[href*="/video/"]')) return current;
-    current = current.parentElement;
-  }
-  return element;
-}
-
 function pushAuthor(results, seen, data) {
   if (!data.username || seen.has(data.username)) return;
   seen.add(data.username);
@@ -119,38 +190,9 @@ function pushAuthor(results, seen, data) {
 function extractAuthorsFromPage() {
   const results = [];
   const seen = new Set();
-  const videoLinks = Array.from(document.querySelectorAll('a[href*="/video/"]'));
-
-  for (const link of videoLinks) {
-    const href = link.href || '';
-    const parsed = parseAuthorFromHref(href);
-    if (!parsed?.username) continue;
-    const card = findVideoCard(link);
-    const sourceText = (card?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 300);
-    pushAuthor(results, seen, {
-      username: parsed.username,
-      sourceVideoUrl: href,
-      sourceText,
-    });
+  for (const author of apiAuthorCache.values()) {
+    pushAuthor(results, seen, author);
   }
-
-  const profileLinks = Array.from(document.querySelectorAll('a[href*="/@"]:not([href*="/video/"])'));
-  for (const link of profileLinks) {
-    const parsed = parseAuthorFromHref(link.href || '');
-    if (!parsed?.username || seen.has(parsed.username)) continue;
-    const card = findVideoCard(link);
-    const videoLink = card?.querySelector?.('a[href*="/video/"]')?.href || '';
-    if (!videoLink) continue;
-    const videoAuthor = parseAuthorFromHref(videoLink)?.username;
-    if (videoAuthor && videoAuthor !== parsed.username) continue;
-    const sourceText = (card?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 300);
-    pushAuthor(results, seen, {
-      username: parsed.username,
-      sourceVideoUrl: videoLink,
-      sourceText,
-    });
-  }
-
   return results;
 }
 
@@ -205,77 +247,25 @@ function getCurrentScrollResult(authorCount) {
   };
 }
 
-function parseSsrUser() {
-  const el = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
-  if (!el) return null;
-  try {
-    const payload = JSON.parse(el.textContent || '{}');
-    const userInfo = payload?.__DEFAULT_SCOPE__?.['webapp.user-detail']?.userInfo;
-    if (!userInfo) return null;
-    return {
-      uid: userInfo.user?.id || '',
-      uniqueId: userInfo.user?.uniqueId || '',
-      nickname: userInfo.user?.nickname || '',
-      signature: userInfo.user?.signature || '',
-      secUid: userInfo.user?.secUid || '',
-      verified: Boolean(userInfo.user?.verified),
-      followerCount: Number(userInfo.stats?.followerCount) || 0,
-      followingCount: Number(userInfo.stats?.followingCount) || 0,
-      heartCount: Number(userInfo.stats?.heartCount) || 0,
-      videoCount: Number(userInfo.stats?.videoCount) || 0,
-    };
-  } catch (error) {
-    return null;
-  }
+function extractVideosFromApi(username) {
+  return [...(apiProfileVideos.get(username)?.values() || [])]
+    .sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
 }
 
-function extractUserFromDom(username) {
-  const ssrUser = parseSsrUser();
-  const followerText = document.querySelector('[data-e2e="followers-count"]')?.textContent || '';
-  const nickname = document.querySelector('[data-e2e="user-title"]')?.textContent?.trim() || '';
-  const signature = document.querySelector('[data-e2e="user-bio"]')?.textContent?.trim() || '';
-
+function getApiUserInfo(username) {
+  const apiUserInfo = apiProfileAuthors.get(username) || {};
   return {
-    uniqueId: ssrUser?.uniqueId || username,
-    nickname: ssrUser?.nickname || nickname,
-    signature: ssrUser?.signature || signature,
-    followerCount: ssrUser?.followerCount || parseCount(followerText),
-    followingCount: ssrUser?.followingCount || 0,
-    heartCount: ssrUser?.heartCount || 0,
-    videoCount: ssrUser?.videoCount || 0,
-    verified: Boolean(ssrUser?.verified),
+    uniqueId: apiUserInfo.uniqueId || username,
+    nickname: apiUserInfo.nickname || '',
+    signature: apiUserInfo.signature || '',
+    followerCount: apiUserInfo.followerCount || 0,
+    videoCount: apiUserInfo.videoCount || 0,
   };
 }
 
-function extractVideosFromDom() {
-  const cards = Array.from(document.querySelectorAll('[data-e2e="user-post-item"], a[href*="/video/"]'));
-  const seen = new Set();
-  const videos = [];
-
-  for (const item of cards) {
-    const card = item.matches?.('a[href*="/video/"]') ? item.parentElement : item;
-    const link = item.matches?.('a[href*="/video/"]') ? item : card?.querySelector?.('a[href*="/video/"]');
-    const href = link?.href || '';
-    const match = href.match(/\/video\/(\d+)/);
-    if (!match) continue;
-    const id = match[1];
-    if (seen.has(id)) continue;
-    seen.add(id);
-
-    const playCount = extractPlayCountFromCard(card);
-    videos.push({
-      id,
-      url: href,
-      desc: '',
-      createTime: extractTimestampFromVideoId(id),
-      playCount,
-      diggCount: 0,
-      commentCount: 0,
-      shareCount: 0,
-    });
-  }
-
-  return videos;
+function extractEmailFromApiSignature(username) {
+  const apiSignature = apiProfileAuthors.get(username)?.signature || '';
+  return extractEmails(apiSignature)[0] || '';
 }
 
 function hasProfileErrorState() {
@@ -310,9 +300,9 @@ function clickInlineRefreshButton() {
   return true;
 }
 
-async function waitForInitialVideos(timeoutMs = 15000, maxInlineRefreshAttempts = 2) {
+async function waitForInitialVideos(username, timeoutMs = 15000, maxInlineRefreshAttempts = 2) {
   const startedAt = Date.now();
-  let videos = extractVideosFromDom();
+  let videos = extractVideosFromApi(username);
   let inlineRefreshAttempts = 0;
   let errorDetected = hasProfileErrorState();
   let privateDetected = hasPrivateAccountState();
@@ -327,7 +317,7 @@ async function waitForInitialVideos(timeoutMs = 15000, maxInlineRefreshAttempts 
     }
     await sleep(500);
     privateDetected = hasPrivateAccountState();
-    videos = extractVideosFromDom();
+    videos = extractVideosFromApi(username);
   }
 
   return {
@@ -344,30 +334,33 @@ async function collectProfile(options = {}) {
   const targetVideoCount = Math.max(1, Number(options.targetVideoCount) || 30);
   const waitMs = Number(options.waitMs) || 1500;
   const initial = await waitForInitialVideos(
+    username,
     Number(options.initialVideoTimeoutMs) || 15000,
     Number(options.maxInlineRefreshAttempts) || 2,
   );
-  let videos = initial.videos;
+  let videos = extractVideosFromApi(username);
+  if (videos.length === 0) videos = initial.videos;
   let unchangedRounds = 0;
 
   while (!initial.privateDetected && videos.length < targetVideoCount && unchangedRounds < 3) {
     const beforeCount = videos.length;
     await scrollPage(waitMs);
-    videos = extractVideosFromDom();
+    const apiVideos = extractVideosFromApi(username);
+    videos = apiVideos.length > videos.length ? apiVideos : videos;
     unchangedRounds = videos.length > beforeCount ? 0 : unchangedRounds + 1;
   }
 
   window.scrollTo({ top: 0, behavior: 'instant' });
   await sleep(300);
-  const userInfo = extractUserFromDom(username);
-  const emails = extractEmails(`${userInfo.signature || ''} ${getPageText()}`);
+  const userInfo = getApiUserInfo(username);
+  const contactEmail = extractEmailFromApiSignature(username);
 
   return {
     username,
     profileUrl: `https://www.tiktok.com/@${username}`,
     userInfo,
     videos,
-    contactEmail: emails[0] || '',
+    contactEmail,
     loadState: {
       initialVideoTimedOut: initial.timedOut,
       profileErrorDetected: initial.errorDetected,
