@@ -1,15 +1,56 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function parseCount(text) {
-  const cleaned = String(text || '').replace(/,/g, '').trim();
-  const match = cleaned.match(/([\d.]+)\s*([KkMmBb])?/);
+  const cleaned = String(text || '')
+    .replace(/[\s\u00a0]+/g, '')
+    .replace(/,/g, '')
+    .trim();
+  const match = cleaned.match(/([\d.]+)\s*([KkMmBb]|万|億|亿|千)?/);
   if (!match) return 0;
   let value = Number.parseFloat(match[1]);
   const unit = (match[2] || '').toUpperCase();
   if (unit === 'K') value *= 1000;
   if (unit === 'M') value *= 1000000;
   if (unit === 'B') value *= 1000000000;
+  if (match[2] === '千') value *= 1000;
+  if (match[2] === '万') value *= 10000;
+  if (match[2] === '億' || match[2] === '亿') value *= 100000000;
   return Math.round(value);
+}
+
+function isCompactCountText(text) {
+  const cleaned = String(text || '')
+    .replace(/[\s\u00a0]+/g, '')
+    .replace(/,/g, '')
+    .trim();
+  return /^[\d.]+([KkMmBb]|万|億|亿|千)$/.test(cleaned);
+}
+
+function isPlainCountText(text) {
+  const cleaned = String(text || '')
+    .replace(/[\s\u00a0]+/g, '')
+    .replace(/,/g, '')
+    .trim();
+  return /^\d+$/.test(cleaned);
+}
+
+function extractPlayCountFromCard(card) {
+  const viewsEl = card?.querySelector?.([
+    '[data-e2e="video-views"]',
+    'strong[data-e2e="video-views"]',
+    '[aria-label*="view" i]',
+    '[aria-label*="播放"]',
+    '[class*="VideoCount"]',
+    '[class*="video-count"]',
+  ].join(','));
+  const viewText = viewsEl?.getAttribute?.('aria-label') || viewsEl?.textContent || '';
+  if (viewText && (isCompactCountText(viewText) || isPlainCountText(viewText))) return parseCount(viewText);
+
+  const candidates = Array.from(card?.querySelectorAll?.('span, strong, div, p') || [])
+    .map((el) => (el.getAttribute?.('aria-label') || el.textContent || '').trim())
+    .filter(isCompactCountText);
+  if (!candidates.length) return 0;
+  return Math.max(...candidates.map(parseCount));
 }
 
 function normalizeUsername(input) {
@@ -220,9 +261,7 @@ function extractVideosFromDom() {
     if (seen.has(id)) continue;
     seen.add(id);
 
-    const text = card?.textContent || link?.textContent || '';
-    const viewsEl = card?.querySelector?.('[data-e2e="video-views"], strong[data-e2e="video-views"], [class*="VideoCount"], [class*="video-count"]');
-    const playCount = parseCount(viewsEl?.textContent || text);
+    const playCount = extractPlayCountFromCard(card);
     videos.push({
       id,
       url: href,

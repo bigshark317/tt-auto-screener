@@ -46,7 +46,6 @@ function buildTierMetrics(level, followerCount, allVideos, rules) {
     .slice(0, recentVideoCount || undefined);
   const playCounts = selectedVideos
     .map((video) => Number(video.playCount) || 0)
-    .filter((count) => count > 0)
     .sort((a, b) => a - b);
   const stablePercent = getStablePercent(level);
   const cutIndex = Math.floor(playCounts.length * (1 - stablePercent));

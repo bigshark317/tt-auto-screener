@@ -7,8 +7,6 @@ let autoSaveTimer = null;
 
 const elements = {
   searchUrl: document.getElementById('searchUrl'),
-  maxProcessed: document.getElementById('maxProcessed'),
-  idleRounds: document.getElementById('idleRounds'),
   concurrentProfiles: document.getElementById('concurrentProfiles'),
   serverBaseUrl: document.getElementById('serverBaseUrl'),
   scrollWaitMs: document.getElementById('scrollWaitMs'),
@@ -96,8 +94,6 @@ function renderLevels(levels) {
 
 function renderConfigForm(config) {
   elements.searchUrl.value = config.search.url || DEFAULT_CONFIG.search.url;
-  elements.maxProcessed.value = config.search.maxProcessed || 0;
-  elements.idleRounds.value = config.search.idleRounds || 20;
   elements.concurrentProfiles.value = config.search.concurrentProfiles || 2;
   elements.profileTabActive.checked = Boolean(config.search.profileTabActive);
   elements.serverBaseUrl.value = config.server.baseUrl || DEFAULT_CONFIG.server.baseUrl;
@@ -179,8 +175,8 @@ function buildConfigFromForm() {
     },
     search: {
       url: elements.searchUrl.value.trim() || DEFAULT_CONFIG.search.url,
-      maxProcessed: Math.max(0, Number(elements.maxProcessed.value) || 0),
-      idleRounds: Math.max(1, numberValue(elements.idleRounds, 20)),
+      maxProcessed: DEFAULT_CONFIG.search.maxProcessed,
+      idleRounds: DEFAULT_CONFIG.search.idleRounds,
       concurrentProfiles: Math.max(1, Math.min(5, numberValue(elements.concurrentProfiles, 2))),
       profileTabActive: elements.profileTabActive.checked,
     },
@@ -217,8 +213,6 @@ async function autoSaveConfig() {
 function bindAutoSave() {
   const fields = [
     elements.searchUrl,
-    elements.maxProcessed,
-    elements.idleRounds,
     elements.concurrentProfiles,
     elements.serverBaseUrl,
     elements.scrollWaitMs,
