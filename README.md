@@ -44,18 +44,27 @@ cd "/Users/bytedance/Desktop/BB-达人助手正式版 v2.0 2/tt-auto-screener"
 npm run server
 ```
 
-如果要启用 TikWM 评论受众分析，启动前先配置环境变量：
+如果要启用 TikWM 评论受众分析，当前服务会默认复用旧插件里的 TikWM 配置：
+
+```text
+免费接口: https://www.tikwm.com/api
+付费接口: https://api.tikwmapi.com
+默认付费 key: 复用旧插件 config.js 中的现有值
+```
+
+你也可以在启动前用环境变量覆盖：
 
 ```bash
 export TT_TIKWM_API_KEY="你的 TikWM key"
-export TT_TIKWM_BASE_URL="https://api.tikwmapi.com"
+export TT_TIKWM_BASE_URL="https://www.tikwm.com/api"
+export TT_TIKWM_PAID_BASE_URL="https://api.tikwmapi.com"
 npm run server
 ```
 
 如果你的 TikWM 评论接口路径不同，可以额外配置：
 
 ```bash
-export TT_TIKWM_COMMENT_ENDPOINT="{baseUrl}/api/comment/list?video_id={videoId}&count={count}&cursor=0"
+export TT_TIKWM_COMMENT_ENDPOINT="{baseUrl}/comment/list?url={videoUrl}&count={count}&cursor={cursor}"
 ```
 
 服务默认监听：

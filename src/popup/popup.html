@@ -58,61 +58,6 @@
           <input id="serverBaseUrl" type="text" value="http://127.0.0.1:17321">
         </label>
 
-        <div class="grid">
-          <label class="field">
-            <span>搜索滚动等待 ms</span>
-            <input id="scrollWaitMs" type="number" min="100" value="1200">
-          </label>
-          <label class="field">
-            <span>主页滚动等待 ms</span>
-            <input id="profileWaitMs" type="number" min="100" value="1500">
-          </label>
-        </div>
-
-        <div class="grid">
-          <label class="field checkbox">
-            <input id="profileTabActive" type="checkbox">
-            <span>采集主页时激活标签</span>
-          </label>
-          <label class="field checkbox">
-            <input id="audienceEnabled" type="checkbox" checked disabled>
-            <span>受众筛选已强制启用</span>
-          </label>
-        </div>
-
-        <div class="grid">
-          <label class="field">
-            <span>排除最近小时</span>
-            <input id="excludeRecentHours" type="number" min="0" value="24">
-          </label>
-          <label class="field">
-            <span>要求主受众国家</span>
-            <input id="requiredTopCountry" type="text" value="US">
-          </label>
-        </div>
-
-        <div class="grid">
-          <label class="field">
-            <span>受众最小样本</span>
-            <input id="minSampleCount" type="number" min="0" value="20">
-          </label>
-          <label class="field">
-            <span>主受众最低占比 %</span>
-            <input id="minTopCountryPercentage" type="number" min="0" max="100" value="50">
-          </label>
-        </div>
-
-        <div class="grid">
-          <label class="field">
-            <span>受众采样视频数</span>
-            <input id="sampleVideoCount" type="number" min="1" value="3">
-          </label>
-          <label class="field">
-            <span>每视频评论数</span>
-            <input id="commentsPerVideo" type="number" min="1" value="50">
-          </label>
-        </div>
-
         <h2>等级规则</h2>
         <div id="levels"></div>
 

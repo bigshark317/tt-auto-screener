@@ -1,4 +1,4 @@
-export const CONFIG_VERSION = 3;
+export const CONFIG_VERSION = 4;
 
 export const DEFAULT_CONFIG = {
   server: {
@@ -20,10 +20,13 @@ export const DEFAULT_CONFIG = {
     audience: {
       enabled: true,
       requiredTopCountry: 'US',
-      minSampleCount: 20,
+      minSampleCount: 200,
       minTopCountryPercentage: 50,
-      sampleVideoCount: 3,
+      sampleVideoCount: 5,
       commentsPerVideo: 50,
+      targetSampleSize: 200,
+      maxPagesPerVideo: 3,
+      maxSamplesPerVideo: 80,
     },
     levels: [
       {

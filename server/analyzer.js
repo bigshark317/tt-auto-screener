@@ -1,13 +1,29 @@
+const { SHARED_CONFIG, isValidComment, detectLanguage } = require('./bb-tt-language');
+
 const DEFAULT_AUDIENCE = {
   enabled: true,
   requiredTopCountry: 'US',
-  minSampleCount: 20,
+  minSampleCount: 200,
   minTopCountryPercentage: 50,
-  sampleVideoCount: 3,
+  sampleVideoCount: 5,
   commentsPerVideo: 50,
+  targetSampleSize: 200,
+  maxPagesPerVideo: 3,
+  maxSamplesPerVideo: 80,
+};
+
+const DEFAULT_TIKWM = {
+  freeBaseUrl: 'https://www.tikwm.com/api',
+  paidBaseUrl: 'https://api.tikwmapi.com',
+  apiKey: 'c80f5c0c36383df2f63b2466f2e4ea6c',
+  authHeader: 'x-tikwmapi-key',
 };
 
 function noop() {}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function formatNumber(value) {
   const num = Number(value) || 0;
@@ -152,6 +168,11 @@ function getCommentCountry(comment) {
   ]));
 }
 
+function getCommentUserId(comment) {
+  const user = comment?.user || comment?.author || comment?.userInfo || comment?.user_info || {};
+  return String(user.uid || user.id || user.user_id || user.userId || '').trim();
+}
+
 function extractComments(payload) {
   const candidates = [
     payload?.data?.comments,
@@ -166,37 +187,148 @@ function extractComments(payload) {
   return [];
 }
 
-function buildCommentUrl(baseUrl, endpointTemplate, videoId, count) {
+function buildCommentUrl(baseUrl, endpointTemplate, videoId, username, count, cursor) {
+  const videoUrl = `https://www.tiktok.com/@${username || '_'}/video/${videoId}`;
   if (endpointTemplate) {
     return endpointTemplate
       .replace(/\{baseUrl\}/g, baseUrl.replace(/\/+$/, ''))
       .replace(/\{videoId\}/g, encodeURIComponent(videoId))
-      .replace(/\{count\}/g, encodeURIComponent(count));
+      .replace(/\{videoUrl\}/g, encodeURIComponent(videoUrl))
+      .replace(/\{count\}/g, encodeURIComponent(count))
+      .replace(/\{cursor\}/g, encodeURIComponent(cursor));
   }
-  const url = new URL('/api/comment/list', baseUrl);
-  url.searchParams.set('video_id', videoId);
+  const url = new URL(`${baseUrl.replace(/\/+$/, '')}/comment/list`);
+  url.searchParams.set('url', videoUrl);
   url.searchParams.set('count', String(count));
-  url.searchParams.set('cursor', '0');
+  url.searchParams.set('cursor', String(cursor));
   return url.toString();
 }
 
-async function fetchTikwmComments(videoId, audienceRules, log = noop) {
-  const baseUrl = process.env.TT_TIKWM_BASE_URL || audienceRules.baseUrl || 'https://api.tikwmapi.com';
-  const endpointTemplate = process.env.TT_TIKWM_COMMENT_ENDPOINT || audienceRules.commentEndpoint || '';
-  const apiKey = process.env.TT_TIKWM_API_KEY || audienceRules.apiKey || '';
-  const authHeader = process.env.TT_TIKWM_AUTH_HEADER || audienceRules.authHeader || 'x-api-key';
-  const count = Math.max(1, Number(audienceRules.commentsPerVideo) || DEFAULT_AUDIENCE.commentsPerVideo);
-  const url = buildCommentUrl(baseUrl, endpointTemplate, videoId, count);
-  const headers = apiKey ? { [authHeader]: apiKey } : {};
-  log(`评论采样请求 | video ${videoId} | count ${count}`);
-  const response = await fetch(url, { headers });
+async function fetchTikwmJson(url, options = {}) {
+  const response = await fetch(url, options);
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.code < 0) {
-    throw new Error(payload?.msg || payload?.message || `TikWM 评论接口失败: ${response.status}`);
+  return { response, payload };
+}
+
+async function requestTikwmCommentPage(videoId, username, count, cursor, audienceRules) {
+  const freeBaseUrl = process.env.TT_TIKWM_BASE_URL || audienceRules.baseUrl || DEFAULT_TIKWM.freeBaseUrl;
+  const paidBaseUrl = process.env.TT_TIKWM_PAID_BASE_URL || audienceRules.paidBaseUrl || DEFAULT_TIKWM.paidBaseUrl;
+  const endpointTemplate = process.env.TT_TIKWM_COMMENT_ENDPOINT || audienceRules.commentEndpoint || '';
+  const apiKey = process.env.TT_TIKWM_API_KEY || audienceRules.apiKey || DEFAULT_TIKWM.apiKey;
+  const authHeader = process.env.TT_TIKWM_AUTH_HEADER || audienceRules.authHeader || DEFAULT_TIKWM.authHeader;
+  const freeUrl = buildCommentUrl(freeBaseUrl, endpointTemplate, videoId, username, count, cursor);
+  const paidUrl = buildCommentUrl(paidBaseUrl, '', videoId, username, count, cursor);
+
+  try {
+    const { response, payload } = await fetchTikwmJson(freeUrl);
+    if (response.ok && !(payload?.code < 0)) {
+      return payload;
+    }
+  } catch (error) {
   }
-  const comments = extractComments(payload);
-  log(`评论采样完成 | video ${videoId} | 评论 ${comments.length}`);
-  return comments;
+
+  if (!apiKey) {
+    throw new Error('TikWM 评论接口失败: 免费接口不可用，且未配置付费 API key');
+  }
+
+  try {
+    const { response, payload } = await fetchTikwmJson(paidUrl, {
+      headers: { [authHeader]: apiKey },
+    });
+    const message = payload?.msg || payload?.message || '';
+    if (response.ok && !(payload?.code < 0)) {
+      return payload;
+    }
+    throw new Error(message || `paid API HTTP ${response.status}`);
+  } catch (error) {
+    throw new Error(`TikWM 评论接口失败: ${error?.message || String(error)}`);
+  }
+}
+
+function sortAudienceVideos(videos) {
+  return [...videos].sort((a, b) => {
+    const commentDelta = (Number(b?.commentCount) || 0) - (Number(a?.commentCount) || 0);
+    if (commentDelta !== 0) return commentDelta;
+    return (Number(b?.createTime) || 0) - (Number(a?.createTime) || 0);
+  });
+}
+
+function selectAudienceVideos(profile) {
+  const followerCount = Number(profile?.userInfo?.followerCount) || 0;
+  const videoRules = followerCount >= 200000
+    ? { recentCount: 30, excludeWithin24h: true }
+    : { recentCount: 20, excludeWithin24h: true, sevenDayThreshold: 21 };
+  const allVideos = Array.isArray(profile?.videos) ? profile.videos : [];
+  const now = Math.floor(Date.now() / 1000);
+
+  let eligible = allVideos.filter((video) => Number(video?.playCount) > 0 || Number(video?._statsPriority || 0) >= 2);
+  if (eligible.length === 0) eligible = allVideos;
+
+  if (videoRules.excludeWithin24h) {
+    const oneDayAgo = now - 24 * 3600;
+    const filtered = eligible.filter((video) => video.createTime === 0 || video.createTime <= oneDayAgo);
+    if (filtered.length > 0) eligible = filtered;
+  }
+
+  if (videoRules.sevenDayThreshold) {
+    const sevenDaysAgo = now - 7 * 24 * 3600;
+    const withTime = eligible.filter((video) => Number(video.createTime) > 0);
+    const last7days = withTime.filter((video) => Number(video.createTime) >= sevenDaysAgo);
+    if (last7days.length >= videoRules.sevenDayThreshold) return last7days;
+  }
+
+  return [...eligible].sort((a, b) => {
+    if (a.createTime > 0 && b.createTime > 0) return b.createTime - a.createTime;
+    if (a.createTime > 0) return -1;
+    if (b.createTime > 0) return 1;
+    return 0;
+  }).slice(0, videoRules.recentCount);
+}
+
+async function collectAudienceSamplesForVideo(video, username, audienceRules, sampleUsers, sampleTexts, commentLangTexts) {
+  const videoId = video?.id;
+  if (!videoId) return 0;
+
+  const targetSampleSize = Math.max(1, Number(audienceRules.targetSampleSize) || DEFAULT_AUDIENCE.targetSampleSize);
+  const pageSize = Math.min(50, Math.max(1, Number(audienceRules.commentsPerVideo) || DEFAULT_AUDIENCE.commentsPerVideo));
+  const maxPages = Math.max(1, Number(audienceRules.maxPagesPerVideo) || DEFAULT_AUDIENCE.maxPagesPerVideo);
+  const maxSamplesPerVideo = Math.max(1, Number(audienceRules.maxSamplesPerVideo) || DEFAULT_AUDIENCE.maxSamplesPerVideo);
+  let addedForVideo = 0;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    if (sampleUsers.size >= targetSampleSize || addedForVideo >= maxSamplesPerVideo) break;
+
+    const cursor = page * pageSize;
+    const payload = await requestTikwmCommentPage(videoId, username, pageSize, cursor, audienceRules);
+    const pageComments = extractComments(payload);
+
+    if (pageComments.length === 0) break;
+
+    for (const comment of pageComments) {
+      if (sampleUsers.size >= targetSampleSize || addedForVideo >= maxSamplesPerVideo) break;
+
+      const uid = getCommentUserId(comment);
+      const country = getCommentCountry(comment);
+      const text = String(comment?.text || '');
+
+      if (!uid || !country) continue;
+      if (sampleUsers.has(uid)) continue;
+      if (!isValidComment(text, sampleTexts)) continue;
+
+      sampleUsers.set(uid, country);
+      sampleTexts.add(text.trim().toLowerCase());
+      if (commentLangTexts.length < targetSampleSize && text.trim().length >= 3) {
+        commentLangTexts.push(text.trim());
+      }
+      addedForVideo += 1;
+    }
+
+    if (pageComments.length < pageSize || payload?.data?.hasMore === false) break;
+    if (page + 1 < maxPages && sampleUsers.size < targetSampleSize && addedForVideo < maxSamplesPerVideo) {
+      await sleep(1200);
+    }
+  }
+  return addedForVideo;
 }
 
 async function evaluateAudience(profile, rules, log = noop) {
@@ -217,48 +349,93 @@ async function evaluateAudience(profile, rules, log = noop) {
   }
 
   const requiredCountry = normalizeCountry(audienceRules.requiredTopCountry || 'US');
-  const videos = sortByRecency(excludeRecentVideos(
-    Array.isArray(profile.videos) ? profile.videos : [],
-    rules,
-  ));
-  const selectedVideos = videos
-    .map((video) => video?.id)
-    .filter(Boolean)
-    .slice(0, Math.max(1, Number(audienceRules.sampleVideoCount) || DEFAULT_AUDIENCE.sampleVideoCount));
-  if (selectedVideos.length === 0) {
+  const targetSampleSize = Math.max(1, Number(audienceRules.targetSampleSize) || DEFAULT_AUDIENCE.targetSampleSize);
+  const recentVideos = selectAudienceVideos(profile);
+  const videos = sortAudienceVideos(recentVideos);
+  if (videos.length === 0) {
     log(`受众分析失败 | @${profile.username} | 无可分析视频`);
     return {
       passed: false,
       topCountry: '',
       topCountryPercentage: 0,
       sampleCount: 0,
+      videosAnalyzed: 0,
+      uniqueCountries: 0,
+      confidence: '不足',
+      regions: [],
+      language: '',
+      languageDetail: {
+        distribution: {},
+        regionInferred: [],
+        eldDetected: {},
+        agreement: '不足',
+        sampleCount: 0,
+        method: '',
+      },
       failureReason: '无可分析视频',
     };
   }
 
-  log(`受众分析开始 | @${profile.username} | 视频 ${selectedVideos.length} | 目标国家 ${requiredCountry}`);
-  const countryCounts = new Map();
-  let sampleCount = 0;
+  const firstBatchSize = Math.max(1, Number(audienceRules.sampleVideoCount) || DEFAULT_AUDIENCE.sampleVideoCount);
+  const firstBatch = videos.slice(0, firstBatchSize);
+  const remainingBatch = videos.slice(firstBatch.length);
+  log(`受众分析开始 | @${profile.username} | 可用视频 ${videos.length} | 首批 ${firstBatch.length} | 目标国家 ${requiredCountry} | 目标样本 ${targetSampleSize}`);
+
+  const sampleUsers = new Map();
+  const sampleTexts = new Set();
+  const commentLangTexts = [];
   const errors = [];
 
-  for (const videoId of selectedVideos) {
-    try {
-      const comments = await fetchTikwmComments(videoId, audienceRules, log);
-      for (const comment of comments) {
-        const country = getCommentCountry(comment);
-        if (!country) continue;
-        countryCounts.set(country, (countryCounts.get(country) || 0) + 1);
-        sampleCount += 1;
+  async function collectBatch(batchVideos) {
+    await Promise.allSettled(batchVideos.map(async (video) => {
+      if (sampleUsers.size >= targetSampleSize) return;
+      try {
+        await collectAudienceSamplesForVideo(
+          video,
+          profile.username,
+          audienceRules,
+          sampleUsers,
+          sampleTexts,
+          commentLangTexts,
+        );
+      } catch (error) {
+        log(`评论采样失败 | video ${video?.id || '-'} | ${error?.message || String(error)}`);
+        errors.push(`${video?.id || '-'}: ${error?.message || String(error)}`);
       }
-    } catch (error) {
-      log(`评论采样失败 | video ${videoId} | ${error?.message || String(error)}`);
-      errors.push(`${videoId}: ${error?.message || String(error)}`);
-    }
+    }));
   }
 
+  await collectBatch(firstBatch);
+  if (sampleUsers.size < targetSampleSize && remainingBatch.length > 0) {
+    log(`受众分析补样本 | @${profile.username} | 首批后样本 ${sampleUsers.size} | 继续视频 ${remainingBatch.length}`);
+    await collectBatch(remainingBatch);
+  }
+
+  const countryCounts = new Map();
+  for (const country of sampleUsers.values()) {
+    countryCounts.set(country, (countryCounts.get(country) || 0) + 1);
+  }
+
+  const sampleCount = sampleUsers.size;
+  const regionCountsObject = Object.fromEntries(countryCounts.entries());
+  const profileTexts = [];
+  if (profile.userInfo?.signature) profileTexts.push(profile.userInfo.signature);
+  for (const video of videos.slice(0, 20)) {
+    if (video?.desc) profileTexts.push(video.desc);
+  }
+  const languageDetail = detectLanguage(profileTexts, commentLangTexts, regionCountsObject, sampleCount);
+  const regions = [...countryCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([code, count]) => ({
+      code,
+      count,
+      percentage: sampleCount > 0 ? Number(((count / sampleCount) * 100).toFixed(1)) : 0,
+      name: SHARED_CONFIG.countryNames[code] || code,
+    }));
   const [topCountry = '', topCount = 0] = [...countryCounts.entries()]
     .sort((a, b) => b[1] - a[1])[0] || [];
   const topCountryPercentage = sampleCount > 0 ? Math.round((topCount / sampleCount) * 100) : 0;
+  const confidence = sampleCount >= 500 ? '高' : sampleCount >= 200 ? '中' : sampleCount >= 50 ? '低' : '不足';
   const minSampleCount = Math.max(0, Number(audienceRules.minSampleCount) || 0);
   const minTopCountryPercentage = Math.max(0, Number(audienceRules.minTopCountryPercentage) || 0);
   log(`受众分析结果 | @${profile.username} | 主国家 ${topCountry || '未知'} | 占比 ${topCountryPercentage}% | 样本 ${sampleCount}`);
@@ -269,6 +446,12 @@ async function evaluateAudience(profile, rules, log = noop) {
       topCountry,
       topCountryPercentage,
       sampleCount,
+      videosAnalyzed: videos.length,
+      uniqueCountries: regions.length,
+      confidence,
+      regions,
+      language: languageDetail.language,
+      languageDetail,
       failureReason: `受众样本不足 ${sampleCount}/${minSampleCount}${errors.length ? `；${errors[0]}` : ''}`,
     };
   }
@@ -278,6 +461,12 @@ async function evaluateAudience(profile, rules, log = noop) {
       topCountry,
       topCountryPercentage,
       sampleCount,
+      videosAnalyzed: videos.length,
+      uniqueCountries: regions.length,
+      confidence,
+      regions,
+      language: languageDetail.language,
+      languageDetail,
       failureReason: `主受众国家 ${topCountry || '未知'} 不等于 ${requiredCountry}`,
     };
   }
@@ -287,6 +476,12 @@ async function evaluateAudience(profile, rules, log = noop) {
       topCountry,
       topCountryPercentage,
       sampleCount,
+      videosAnalyzed: videos.length,
+      uniqueCountries: regions.length,
+      confidence,
+      regions,
+      language: languageDetail.language,
+      languageDetail,
       failureReason: `主受众占比 ${topCountryPercentage}% 低于 ${minTopCountryPercentage}%`,
     };
   }
@@ -296,6 +491,12 @@ async function evaluateAudience(profile, rules, log = noop) {
     topCountry,
     topCountryPercentage,
     sampleCount,
+    videosAnalyzed: videos.length,
+    uniqueCountries: regions.length,
+    confidence,
+    regions,
+    language: languageDetail.language,
+    languageDetail,
     failureReason: '',
   };
 }
@@ -320,6 +521,16 @@ async function analyzeProfile(profile, rules, options = {}) {
       metrics: activeMetrics,
       bestQualified,
       audienceCheck,
+      detectedLanguage: audienceCheck.language || '',
+      languageDetail: audienceCheck.languageDetail || null,
+      audienceAnalysis: {
+        totalSamples: audienceCheck.sampleCount || 0,
+        videosAnalyzed: audienceCheck.videosAnalyzed || 0,
+        uniqueRegions: audienceCheck.uniqueCountries || 0,
+        regions: audienceCheck.regions || [],
+        confidence: audienceCheck.confidence || '不足',
+        analyzing: false,
+      },
       decisionReason: isQualified
         ? `命中 ${bestQualified.tierLabel}`
         : audienceCheck.passed ? summarizeFailure(activeMetrics, tierMetrics) : audienceCheck.failureReason,

@@ -1,6 +1,6 @@
 import { CONFIG_VERSION, DEFAULT_CONFIG, mergeConfig } from '../shared/config.js';
 
-const SETTINGS_KEY = 'tt_auto_screener_settings_v3';
+const SETTINGS_KEY = `tt_auto_screener_settings_v${CONFIG_VERSION}`;
 let currentConfig = DEFAULT_CONFIG;
 let configRendered = false;
 let autoSaveTimer = null;
@@ -9,16 +9,6 @@ const elements = {
   searchUrl: document.getElementById('searchUrl'),
   concurrentProfiles: document.getElementById('concurrentProfiles'),
   serverBaseUrl: document.getElementById('serverBaseUrl'),
-  scrollWaitMs: document.getElementById('scrollWaitMs'),
-  profileWaitMs: document.getElementById('profileWaitMs'),
-  profileTabActive: document.getElementById('profileTabActive'),
-  audienceEnabled: document.getElementById('audienceEnabled'),
-  excludeRecentHours: document.getElementById('excludeRecentHours'),
-  requiredTopCountry: document.getElementById('requiredTopCountry'),
-  minSampleCount: document.getElementById('minSampleCount'),
-  minTopCountryPercentage: document.getElementById('minTopCountryPercentage'),
-  sampleVideoCount: document.getElementById('sampleVideoCount'),
-  commentsPerVideo: document.getElementById('commentsPerVideo'),
   levels: document.getElementById('levels'),
   resetConfigBtn: document.getElementById('resetConfigBtn'),
   primaryActionBtn: document.getElementById('primaryActionBtn'),
@@ -117,17 +107,7 @@ function renderLevels(levels) {
 function renderConfigForm(config) {
   elements.searchUrl.value = config.search.url || DEFAULT_CONFIG.search.url;
   elements.concurrentProfiles.value = config.search.concurrentProfiles || DEFAULT_CONFIG.search.concurrentProfiles;
-  elements.profileTabActive.checked = Boolean(config.search.profileTabActive);
   elements.serverBaseUrl.value = config.server.baseUrl || DEFAULT_CONFIG.server.baseUrl;
-  elements.scrollWaitMs.value = config.scroll.scrollWaitMs || 1200;
-  elements.profileWaitMs.value = config.scroll.profileWaitMs || 1500;
-  elements.excludeRecentHours.value = config.rules.excludeRecentHours || 0;
-  elements.audienceEnabled.checked = true;
-  elements.requiredTopCountry.value = config.rules.audience?.requiredTopCountry || '';
-  elements.minSampleCount.value = config.rules.audience?.minSampleCount ?? 20;
-  elements.minTopCountryPercentage.value = config.rules.audience?.minTopCountryPercentage ?? 50;
-  elements.sampleVideoCount.value = config.rules.audience?.sampleVideoCount ?? 3;
-  elements.commentsPerVideo.value = config.rules.audience?.commentsPerVideo ?? 50;
   renderLevels(config.rules.levels || []);
   configRendered = true;
 }
@@ -203,22 +183,15 @@ function buildConfigFromForm() {
         elements.concurrentProfiles,
         DEFAULT_CONFIG.search.concurrentProfiles,
       ))),
-      profileTabActive: elements.profileTabActive.checked,
+      profileTabActive: DEFAULT_CONFIG.search.profileTabActive,
     },
     scroll: {
-      scrollWaitMs: Math.max(100, numberValue(elements.scrollWaitMs, 1200)),
-      profileWaitMs: Math.max(100, numberValue(elements.profileWaitMs, 1500)),
+      scrollWaitMs: DEFAULT_CONFIG.scroll.scrollWaitMs,
+      profileWaitMs: DEFAULT_CONFIG.scroll.profileWaitMs,
     },
     rules: {
-      excludeRecentHours: Math.max(0, numberValue(elements.excludeRecentHours, 24)),
-      audience: {
-        enabled: true,
-        requiredTopCountry: elements.requiredTopCountry.value.trim().toUpperCase(),
-        minSampleCount: Math.max(0, numberValue(elements.minSampleCount, 20)),
-        minTopCountryPercentage: Math.max(0, numberValue(elements.minTopCountryPercentage, 50)),
-        sampleVideoCount: Math.max(1, numberValue(elements.sampleVideoCount, 3)),
-        commentsPerVideo: Math.max(1, numberValue(elements.commentsPerVideo, 50)),
-      },
+      excludeRecentHours: DEFAULT_CONFIG.rules.excludeRecentHours,
+      audience: { ...DEFAULT_CONFIG.rules.audience },
       levels: readLevelsFromForm(),
     },
   });
@@ -240,22 +213,12 @@ function bindAutoSave() {
     elements.searchUrl,
     elements.concurrentProfiles,
     elements.serverBaseUrl,
-    elements.scrollWaitMs,
-    elements.profileWaitMs,
-    elements.excludeRecentHours,
-    elements.requiredTopCountry,
-    elements.minSampleCount,
-    elements.minTopCountryPercentage,
-    elements.sampleVideoCount,
-    elements.commentsPerVideo,
   ];
 
   for (const field of fields) {
     field.addEventListener('blur', autoSaveConfig);
   }
 
-  elements.profileTabActive.addEventListener('change', autoSaveConfig);
-  elements.audienceEnabled.addEventListener('change', autoSaveConfig);
   elements.levels.addEventListener('blur', (event) => {
     if (event.target?.matches?.('input')) autoSaveConfig();
   }, true);

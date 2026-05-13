@@ -75,6 +75,9 @@ function normalizeApiVideo(raw) {
   const playCount = numberFrom(getNested(stats, ['playCount', 'play_count', 'playCountStr', 'play_count_str'])
     ?? getNested(statsV2, ['playCount', 'play_count', 'playCountStr', 'play_count_str'])
     ?? getNested(item, ['playCount', 'play_count']));
+  const commentCount = numberFrom(getNested(stats, ['commentCount', 'comment_count'])
+    ?? getNested(statsV2, ['commentCount', 'comment_count'])
+    ?? getNested(item, ['commentCount', 'comment_count']));
   const createTime = Number(getNested(item, ['createTime', 'create_time'])) || extractTimestampFromVideoId(id);
 
   return {
@@ -84,6 +87,7 @@ function normalizeApiVideo(raw) {
     desc: item.desc || item.description || '',
     createTime,
     playCount,
+    commentCount,
     author: {
       username,
       nickname: author.nickname || author.nickName || '',
@@ -146,6 +150,7 @@ function cacheApiPayload(payload, sourceUrl = '') {
         desc: item.desc,
         createTime: item.createTime,
         playCount: item.playCount,
+        commentCount: item.commentCount,
       });
       apiProfileVideos.set(item.username, videos);
     }
@@ -252,6 +257,19 @@ function extractVideosFromApi(username) {
     .sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
 }
 
+function getVisibleProfileVideoCardCount(username) {
+  const normalizedUsername = normalizeUsername(username);
+  let count = 0;
+  for (const link of document.querySelectorAll('a[href*="/video/"]')) {
+    const href = link.getAttribute('href') || link.href || '';
+    if (!/\/video\/\d+/.test(href)) continue;
+    if (normalizedUsername && !href.includes(`/@${normalizedUsername}/`)) continue;
+    count += 1;
+    if (count >= 3) break;
+  }
+  return count;
+}
+
 function getApiUserInfo(username) {
   const apiUserInfo = apiProfileAuthors.get(username) || {};
   return {
@@ -306,6 +324,8 @@ async function waitForInitialVideos(username, timeoutMs = 15000, maxInlineRefres
   let inlineRefreshAttempts = 0;
   let errorDetected = hasProfileErrorState();
   let privateDetected = hasPrivateAccountState();
+  let visibleVideoCards = getVisibleProfileVideoCardCount(username);
+  let domReadyWithoutApi = false;
 
   while (videos.length === 0 && !privateDetected && Date.now() - startedAt < timeoutMs) {
     if (hasProfileErrorState()) {
@@ -314,6 +334,11 @@ async function waitForInitialVideos(username, timeoutMs = 15000, maxInlineRefres
         inlineRefreshAttempts += 1;
         await sleep(2000);
       }
+    }
+    visibleVideoCards = getVisibleProfileVideoCardCount(username);
+    if (visibleVideoCards > 0 && Date.now() - startedAt >= 1200) {
+      domReadyWithoutApi = true;
+      break;
     }
     await sleep(500);
     privateDetected = hasPrivateAccountState();
@@ -326,6 +351,8 @@ async function waitForInitialVideos(username, timeoutMs = 15000, maxInlineRefres
     errorDetected,
     privateDetected,
     inlineRefreshAttempts,
+    domReadyWithoutApi,
+    visibleVideoCards,
   };
 }
 
@@ -366,6 +393,8 @@ async function collectProfile(options = {}) {
       profileErrorDetected: initial.errorDetected,
       privateAccountDetected: initial.privateDetected,
       inlineRefreshAttempts: initial.inlineRefreshAttempts,
+      domReadyWithoutApi: initial.domReadyWithoutApi,
+      visibleVideoCards: initial.visibleVideoCards,
     },
     audience: {
       topCountry: '',

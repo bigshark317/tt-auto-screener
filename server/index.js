@@ -154,5 +154,5 @@ const server = http.createServer((request, response) => {
 server.listen(PORT, '127.0.0.1', () => {
   log(`TikTok Auto Screener 本地服务已启动: http://127.0.0.1:${PORT}`);
   log(`Excel 表格路径: ${WORKBOOK_PATH}`);
-  log(`TikWM 配置 | base ${process.env.TT_TIKWM_BASE_URL || 'https://api.tikwmapi.com'} | key ${process.env.TT_TIKWM_API_KEY ? '已设置' : '未设置'}`);
+  log(`TikWM 配置 | free ${process.env.TT_TIKWM_BASE_URL || 'https://www.tikwm.com/api'} | paid ${process.env.TT_TIKWM_PAID_BASE_URL || 'https://api.tikwmapi.com'} | key ${process.env.TT_TIKWM_API_KEY ? '环境变量' : '复用插件默认值'}`);
 });

@@ -545,14 +545,18 @@ async function collectAuthor(author) {
     url: author.profileUrl,
     active: false,
   });
+  let tabClosed = false;
   try {
     const profile = await loadAndCollectActiveProfile(tab.id, author);
+    await tabsRemove(tab.id);
+    tabClosed = true;
     if (profile.loadState?.privateAccountDetected) {
       state.processed.push(author.username);
       updateStats();
       log(`跳过 @${author.username} | 私密账号`);
       return;
     }
+    log(`开始分析 @${author.username} | 已采集主页数据 | 视频 ${profile.videos?.length || 0}${profile.loadState?.domReadyWithoutApi ? ` | DOM 已就绪 ${profile.loadState.visibleVideoCards || 0} 卡片` : ''}`);
     const { result, row } = await analyzeProfileWithServer(profile);
     if (row.是否合格 === '合格') state.rows.push(row);
     state.processed.push(author.username);
@@ -572,7 +576,7 @@ async function collectAuthor(author) {
       log(`失败 @${author.username}: ${error?.message || String(error)}`);
     }
   } finally {
-    await tabsRemove(tab.id);
+    if (!tabClosed) await tabsRemove(tab.id);
     if (state.server.connected) await persist();
     else await saveStateLocally();
   }
